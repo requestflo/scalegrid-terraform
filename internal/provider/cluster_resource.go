@@ -23,9 +23,8 @@ import (
 const clusterPollInterval = 20 * time.Second
 
 var (
-	_ resource.Resource                = (*clusterResource)(nil)
-	_ resource.ResourceWithConfigure   = (*clusterResource)(nil)
-	_ resource.ResourceWithImportState = (*clusterResource)(nil)
+	_ resource.Resource              = (*clusterResource)(nil)
+	_ resource.ResourceWithConfigure = (*clusterResource)(nil)
 )
 
 // NewClusterResource is the constructor registered with the provider.
@@ -455,17 +454,6 @@ func (r *clusterResource) Delete(ctx context.Context, req resource.DeleteRequest
 }
 
 // ImportState accepts "<database>:<cluster_id>".
-func (r *clusterResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	db, id, ok := splitImportID(req.ID)
-	if !ok {
-		resp.Diagnostics.AddError("Invalid import ID",
-			"Expected import ID in the form \"database:cluster_id\" (e.g. \"mongodb:abc123\").")
-		return
-	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
-}
-
 func (r *clusterResource) resolveProfiles(ctx context.Context, names []string) ([]string, error) {
 	ids := make([]string, 0, len(names))
 	for _, name := range names {

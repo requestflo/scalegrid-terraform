@@ -94,7 +94,7 @@ func buildCreateBody(in CreateClusterInput) (map[string]any, error) {
 			"machinePoolIDList": in.MachinePoolIDs,
 			"replicaConfig":     in.ReplicaConfig,
 			"enableAuth":        true,
-			"engine":            defaultStr(in.MongoEngine, "INNODB"),
+			"engine":            "INNODB",
 			"enableSSL":         in.EnableSSL,
 			"encryptDisk":       in.EncryptDisk,
 		}

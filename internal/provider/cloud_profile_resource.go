@@ -19,9 +19,8 @@ import (
 )
 
 var (
-	_ resource.Resource                = (*cloudProfileResource)(nil)
-	_ resource.ResourceWithConfigure   = (*cloudProfileResource)(nil)
-	_ resource.ResourceWithImportState = (*cloudProfileResource)(nil)
+	_ resource.Resource              = (*cloudProfileResource)(nil)
+	_ resource.ResourceWithConfigure = (*cloudProfileResource)(nil)
 )
 
 // NewCloudProfileResource is the constructor registered with the provider.
@@ -225,10 +224,6 @@ func (r *cloudProfileResource) Delete(ctx context.Context, req resource.DeleteRe
 	if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
 		resp.Diagnostics.AddError("Error waiting for cloud profile deletion", err.Error())
 	}
-}
-
-func (r *cloudProfileResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 func (r *cloudProfileResource) readInto(ctx context.Context, id string, model *cloudProfileResourceModel, diags *diag.Diagnostics) {

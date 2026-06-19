@@ -49,8 +49,6 @@ resource "scalegrid_cloud_profile" "aws" {
 - `id` (String) Machine pool ID.
 - `cloud_type` (String) Cloud provider (e.g. AWS).
 
-## Import
-
-```shell
-terraform import scalegrid_cloud_profile.aws <machine_pool_id>
-```
+~> **Import is not supported.** The `secret_key` is sensitive and never returned
+by the API, so an imported cloud profile cannot be reconciled without a
+replacement diff. Define cloud profiles in configuration instead.

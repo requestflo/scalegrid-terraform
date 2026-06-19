@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -69,6 +70,7 @@ func (r *followerResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Required:      true,
 				Description:   "Hours between each sync from the source cluster.",
 				PlanModifiers: reqReplaceInt(),
+				Validators:    []validator.Int64{int64validator.AtLeast(1)},
 			},
 			"start_hour": schema.Int64Attribute{
 				Optional:      true,
@@ -76,6 +78,7 @@ func (r *followerResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Default:       int64default.StaticInt64(0),
 				Description:   "Hour of day (0-23) at which the first sync starts.",
 				PlanModifiers: reqReplaceInt(),
+				Validators:    []validator.Int64{int64validator.Between(0, 23)},
 			},
 		},
 	}

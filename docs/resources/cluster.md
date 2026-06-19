@@ -68,8 +68,7 @@ resource "scalegrid_cluster" "mongo" {
 - `encryption_enabled` (Boolean) Whether encryption at rest is active.
 - `ssl_active` (Boolean) Whether SSL is active.
 
-## Import
-
-```shell
-terraform import scalegrid_cluster.mongo mongodb:<cluster_id>
-```
+~> **Import is not supported.** Cluster creation parameters such as
+`cloud_profile_names` and the per-engine replica/server counts cannot be read
+back from the API, so an imported cluster would always show a destructive
+replacement diff. Define clusters in configuration instead.

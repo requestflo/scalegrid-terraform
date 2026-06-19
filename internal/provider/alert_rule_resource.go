@@ -177,6 +177,14 @@ func (r *alertRuleResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if rule.Threshold != "" {
 		state.Threshold = types.StringValue(rule.Threshold)
 	}
+	if rule.AverageType != "" {
+		state.Duration = types.StringValue(rule.AverageType)
+	}
+	if len(rule.Notifications) > 0 {
+		list, d := stringsToList(ctx, rule.Notifications)
+		resp.Diagnostics.Append(d...)
+		state.Notifications = list
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
