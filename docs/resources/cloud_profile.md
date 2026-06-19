@@ -1,23 +1,30 @@
 ---
 page_title: "scalegrid_cloud_profile Resource - terraform-provider-scalegrid"
 description: |-
-  Manages a ScaleGrid cloud profile.
+  Manages an AWS ScaleGrid cloud profile.
 ---
 
 # scalegrid_cloud_profile (Resource)
 
-Manages a ScaleGrid cloud profile, which stores the cloud credentials used to
-provision clusters in a Bring Your Own Cloud account.
+Manages an AWS (EC2/VPC) ScaleGrid cloud profile used to provision clusters in
+your own AWS account. Azure profiles require an interactive permission-granting
+script and are not supported by this resource.
 
 ## Example Usage
 
 ```terraform
 resource "scalegrid_cloud_profile" "aws" {
-  name           = "aws-production"
-  cloud_provider = "aws"
-  region         = "us-east-1"
-  access_key     = var.aws_access_key
-  secret_key     = var.aws_secret_key
+  database            = "mongodb"
+  name                = "aws-use1-a"
+  region              = "us-east-1"
+  access_key          = var.aws_access_key
+  secret_key          = var.aws_secret_key
+  vpc_id              = "vpc-0123456789abcdef0"
+  subnet_id           = "subnet-0123456789abcdef0"
+  vpc_cidr            = "10.0.0.0/16"
+  subnet_cidr         = "10.0.1.0/24"
+  security_group_id   = "sg-0123456789abcdef0"
+  security_group_name = "scalegrid-mongo"
 }
 ```
 
@@ -25,26 +32,25 @@ resource "scalegrid_cloud_profile" "aws" {
 
 ### Required
 
-- `name` (String) Human-readable name of the cloud profile.
-- `cloud_provider` (String) One of `aws`, `azure`, `gcp`, `digitalocean`, `oci`, or `vmware`. Forces replacement.
+- `database` (String) Engine the profile is for. Forces replacement.
+- `name` (String) Unique profile name. Forces replacement.
+- `region` (String) AWS region. Forces replacement.
+- `access_key` (String) AWS access key. Updatable (rotates keys).
+- `secret_key` (String, Sensitive) AWS secret key. Updatable (rotates keys).
+- `vpc_id`, `subnet_id`, `vpc_cidr`, `subnet_cidr`, `security_group_id`, `security_group_name` (String) AWS networking details. Force replacement.
 
 ### Optional
 
-- `region` (String) Default cloud region for the profile.
-- `access_key` (String) Access key (AWS) or equivalent identifier.
-- `secret_key` (String, Sensitive) Secret key (AWS). Write-only.
-- `subscription_id` (String) Subscription ID (Azure).
-- `tenant_id` (String) Tenant ID (Azure).
-- `client_id` (String) Client/application ID (Azure).
-- `client_secret` (String, Sensitive) Client secret (Azure). Write-only.
+- `connectivity_config` (String) `INTERNET` (default), `INTRANET`, `SECURITYGROUP`, or `CUSTOMIPRANGE`. Forces replacement.
+- `enable_ssh` (Boolean) Enable SSH access. Default `false`. Forces replacement.
 
 ### Read-Only
 
-- `id` (String) Unique identifier of the cloud profile.
-- `created_at` (String) Creation timestamp.
+- `id` (String) Machine pool ID.
+- `cloud_type` (String) Cloud provider (e.g. AWS).
 
 ## Import
 
 ```shell
-terraform import scalegrid_cloud_profile.aws <cloud_profile_id>
+terraform import scalegrid_cloud_profile.aws <machine_pool_id>
 ```

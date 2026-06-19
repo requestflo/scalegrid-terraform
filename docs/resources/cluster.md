@@ -6,22 +6,24 @@ description: |-
 
 # scalegrid_cluster (Resource)
 
-Manages a ScaleGrid database deployment (cluster) for MongoDB, Redis, MySQL, or
-PostgreSQL. Provisioning is asynchronous; Terraform waits for the cluster to
-become available before completing the apply.
+Manages a ScaleGrid database deployment for MongoDB, Redis, MySQL, or
+PostgreSQL. Provisioning is asynchronous; Terraform waits for the provisioning
+job to finish before completing the apply. Most attributes are immutable —
+changing them forces a new cluster. `size` (scale) and `paused` (pause/resume)
+are applied in place.
 
 ## Example Usage
 
 ```terraform
 resource "scalegrid_cluster" "mongo" {
-  name             = "production-mongo"
-  database_type    = "mongodb"
-  version          = "7.0"
-  deployment_type  = "replicaset"
-  cloud_profile_id = scalegrid_cloud_profile.aws.id
-  region           = "us-east-1"
-  size_id          = "AWS_M5_LARGE"
-  disk_size_gb     = 100
+  database            = "mongodb"
+  name                = "production-mongo"
+  size                = "Small"
+  version             = "7.0"
+  shard_count         = 1
+  replica_count       = 3
+  cloud_profile_names = ["aws-use1-a", "aws-use1-b", "aws-use1-c"]
+  enable_ssl          = true
 }
 ```
 
@@ -29,33 +31,45 @@ resource "scalegrid_cluster" "mongo" {
 
 ### Required
 
-- `name` (String) Human-readable name of the cluster.
-- `database_type` (String) Database engine: `mongodb`, `redis`, `mysql`, or `postgresql`. Forces replacement.
-- `cloud_profile_id` (String) ID of the cloud profile used to provision the cluster. Forces replacement.
-- `size_id` (String) Instance size identifier. Changing this scales the cluster in place.
+- `database` (String) Engine: `mongodb`, `redis`, `mysql`, or `postgresql`. Forces replacement.
+- `name` (String) Unique cluster name. Forces replacement.
+- `size` (String) Size tier: `Micro`, `Small`, `Medium`, `Large`, `XLarge`, `X2XLarge`, `X4XLarge`. Updatable (scales in place).
+- `version` (String) Engine version. See the `scalegrid_database_versions` data source. Forces replacement.
+- `cloud_profile_names` (List of String) Cloud profile names to deploy nodes into. Forces replacement.
 
 ### Optional
 
-- `version` (String) Engine version to deploy. Forces replacement.
-- `deployment_type` (String) Topology: `standalone`, `replicaset`, `sharded`, or `cluster`. Forces replacement.
-- `region` (String) Cloud region. Forces replacement.
-- `disk_size_gb` (Number) Disk size in GB.
-- `shard_count` (Number) Number of shards (sharded deployments only). Forces replacement.
-- `ssl_enabled` (Boolean) Whether SSL/TLS is enabled. Defaults to `true`. Forces replacement.
-- `encryption_at_rest` (Boolean) Whether encryption at rest is enabled. Defaults to `false`. Forces replacement.
-- `tags` (List of String) Optional tags applied to the cluster.
+- `shard_count` (Number) Shards. Default `1`. Forces replacement.
+- `replica_count` (Number) Nodes per shard for MongoDB/MySQL/PostgreSQL. Forces replacement.
+- `server_count` (Number) Nodes per shard for Redis. Forces replacement.
+- `sentinel_count` (Number) Redis sentinel nodes. Forces replacement.
+- `sentinel_cloud_profile_names` (List of String) Cloud profiles for Redis sentinels. Forces replacement.
+- `encrypt_disk` (Boolean) Encrypt the data disk. Default `false`. Forces replacement.
+- `enable_ssl` (Boolean) Enable SSL/TLS. Default `false`. Forces replacement.
+- `paused` (Boolean) Pause/resume the cluster. Default `false`. Updatable.
+- `mongo_engine` (String) MongoDB storage engine. Forces replacement.
+- `compression_algo` (String) MongoDB compression (`snappy`, `zlib`, `zstd`). Forces replacement.
+- `cluster_mode` (Boolean) Redis cluster mode. Forces replacement.
+- `backup_interval_hours` (Number) Redis scheduled backup interval. Forces replacement.
+- `maxmemory_policy` (String) Redis eviction policy. Forces replacement.
+- `enable_rdb` (Boolean) Redis RDB snapshots. Forces replacement.
+- `enable_aof` (Boolean) Redis AOF persistence. Forces replacement.
+- `replica_config` (Number) MySQL replication mode (0/1/2). Forces replacement.
+- `replication_type` (String) PostgreSQL `ASYNC`/`SYNC`. Forces replacement.
+- `sync_commit_type` (String) PostgreSQL synchronous commit type. Forces replacement.
+- `enable_pgbouncer` (Boolean) PostgreSQL PgBouncer pooling. Forces replacement.
 
 ### Read-Only
 
-- `id` (String) Unique identifier of the cluster.
-- `status` (String) Current lifecycle status.
-- `host` (String) Primary hostname for connecting to the cluster.
-- `port` (Number) Connection port.
-- `connection_string` (String, Sensitive) Connection string.
-- `created_at` (String) Creation timestamp.
+- `id` (String) Cluster ID.
+- `status` (String) Lifecycle status.
+- `cluster_type` (String) Topology.
+- `disk_size_gb` (Number) Provisioned disk size.
+- `encryption_enabled` (Boolean) Whether encryption at rest is active.
+- `ssl_active` (Boolean) Whether SSL is active.
 
 ## Import
 
 ```shell
-terraform import scalegrid_cluster.mongo <cluster_id>
+terraform import scalegrid_cluster.mongo mongodb:<cluster_id>
 ```

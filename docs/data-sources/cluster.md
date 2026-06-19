@@ -1,18 +1,19 @@
 ---
 page_title: "scalegrid_cluster Data Source - terraform-provider-scalegrid"
 description: |-
-  Fetches a single ScaleGrid cluster by ID.
+  Fetches a single ScaleGrid cluster by ID or name.
 ---
 
 # scalegrid_cluster (Data Source)
 
-Fetches a single ScaleGrid cluster by ID.
+Fetches a single ScaleGrid cluster by ID or name.
 
 ## Example Usage
 
 ```terraform
-data "scalegrid_cluster" "existing" {
-  id = "5f8d0c9b1c9d440000a1b2c3"
+data "scalegrid_cluster" "mongo" {
+  database = "mongodb"
+  name     = "production-mongo"
 }
 ```
 
@@ -20,20 +21,19 @@ data "scalegrid_cluster" "existing" {
 
 ### Required
 
-- `id` (String) ID of the cluster to look up.
+- `database` (String) Engine: `mongodb`, `redis`, `mysql`, or `postgresql`.
+
+### Optional
+
+- `id` (String) Cluster ID. Either `id` or `name` must be set.
+- `name` (String) Cluster name. Either `id` or `name` must be set.
 
 ### Read-Only
 
-- `name` (String)
-- `database_type` (String)
-- `version` (String)
-- `deployment_type` (String)
-- `cloud_profile_id` (String)
-- `region` (String)
-- `size_id` (String)
-- `disk_size_gb` (Number)
 - `status` (String)
-- `host` (String)
-- `port` (Number)
-- `connection_string` (String, Sensitive)
-- `created_at` (String)
+- `size` (String)
+- `version` (String)
+- `cluster_type` (String)
+- `disk_size_gb` (Number)
+- `ssl_enabled` (Boolean)
+- `encryption_enabled` (Boolean)

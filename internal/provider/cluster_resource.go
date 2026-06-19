@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -19,164 +20,237 @@ import (
 	"github.com/requestflo/scalegrid-terraform/internal/client"
 )
 
+const clusterPollInterval = 20 * time.Second
+
 var (
 	_ resource.Resource                = (*clusterResource)(nil)
 	_ resource.ResourceWithConfigure   = (*clusterResource)(nil)
 	_ resource.ResourceWithImportState = (*clusterResource)(nil)
 )
 
-// clusterPollInterval controls how often cluster provisioning is polled.
-const clusterPollInterval = 15 * time.Second
-
 // NewClusterResource is the constructor registered with the provider.
-func NewClusterResource() resource.Resource {
-	return &clusterResource{}
-}
+func NewClusterResource() resource.Resource { return &clusterResource{} }
 
 type clusterResource struct {
 	client *client.Client
 }
 
-// clusterResourceModel maps the resource schema to Go types.
 type clusterResourceModel struct {
-	ID               types.String `tfsdk:"id"`
-	Name             types.String `tfsdk:"name"`
-	DatabaseType     types.String `tfsdk:"database_type"`
-	Version          types.String `tfsdk:"version"`
-	DeploymentType   types.String `tfsdk:"deployment_type"`
-	CloudProfileID   types.String `tfsdk:"cloud_profile_id"`
-	Region           types.String `tfsdk:"region"`
-	SizeID           types.String `tfsdk:"size_id"`
-	DiskSizeGB       types.Int64  `tfsdk:"disk_size_gb"`
-	ShardCount       types.Int64  `tfsdk:"shard_count"`
-	SSLEnabled       types.Bool   `tfsdk:"ssl_enabled"`
-	EncryptionAtRest types.Bool   `tfsdk:"encryption_at_rest"`
-	Tags             types.List   `tfsdk:"tags"`
+	ID                types.String `tfsdk:"id"`
+	Database          types.String `tfsdk:"database"`
+	Name              types.String `tfsdk:"name"`
+	Size              types.String `tfsdk:"size"`
+	Version           types.String `tfsdk:"version"`
+	CloudProfileNames types.List   `tfsdk:"cloud_profile_names"`
+	ShardCount        types.Int64  `tfsdk:"shard_count"`
+	ReplicaCount      types.Int64  `tfsdk:"replica_count"`
+	ServerCount       types.Int64  `tfsdk:"server_count"`
+	SentinelCount     types.Int64  `tfsdk:"sentinel_count"`
+	SentinelProfiles  types.List   `tfsdk:"sentinel_cloud_profile_names"`
+	EncryptDisk       types.Bool   `tfsdk:"encrypt_disk"`
+	EnableSSL         types.Bool   `tfsdk:"enable_ssl"`
+	Paused            types.Bool   `tfsdk:"paused"`
 
-	Status           types.String `tfsdk:"status"`
-	Host             types.String `tfsdk:"host"`
-	Port             types.Int64  `tfsdk:"port"`
-	ConnectionString types.String `tfsdk:"connection_string"`
-	CreatedAt        types.String `tfsdk:"created_at"`
+	// MongoDB
+	MongoEngine     types.String `tfsdk:"mongo_engine"`
+	CompressionAlgo types.String `tfsdk:"compression_algo"`
+	// Redis
+	ClusterMode         types.Bool   `tfsdk:"cluster_mode"`
+	BackupIntervalHours types.Int64  `tfsdk:"backup_interval_hours"`
+	MaxMemoryPolicy     types.String `tfsdk:"maxmemory_policy"`
+	EnableRDB           types.Bool   `tfsdk:"enable_rdb"`
+	EnableAOF           types.Bool   `tfsdk:"enable_aof"`
+	// MySQL
+	ReplicaConfig types.Int64 `tfsdk:"replica_config"`
+	// PostgreSQL
+	ReplicationType types.String `tfsdk:"replication_type"`
+	SyncCommitType  types.String `tfsdk:"sync_commit_type"`
+	EnablePgBouncer types.Bool   `tfsdk:"enable_pgbouncer"`
+
+	// Computed
+	Status            types.String `tfsdk:"status"`
+	ClusterType       types.String `tfsdk:"cluster_type"`
+	DiskSizeGB        types.Int64  `tfsdk:"disk_size_gb"`
+	EncryptionEnabled types.Bool   `tfsdk:"encryption_enabled"`
+	SSLActive         types.Bool   `tfsdk:"ssl_active"`
 }
 
 func (r *clusterResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_cluster"
 }
 
+func reqReplaceStr() []planmodifier.String {
+	return []planmodifier.String{stringplanmodifier.RequiresReplace()}
+}
+func reqReplaceInt() []planmodifier.Int64 {
+	return []planmodifier.Int64{int64planmodifier.RequiresReplace()}
+}
+
 func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a ScaleGrid database deployment (cluster).",
+		Description: "Manages a ScaleGrid database deployment (cluster). Most attributes are immutable " +
+			"and changing them forces a new cluster; `size` and `paused` are applied in place.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
 				Description:   "Unique identifier of the cluster.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"name": schema.StringAttribute{
-				Required:    true,
-				Description: "Human-readable name of the cluster.",
-			},
-			"database_type": schema.StringAttribute{
+			"database": schema.StringAttribute{
 				Required:      true,
 				Description:   "Database engine: `mongodb`, `redis`, `mysql`, or `postgresql`.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
-				Validators: []validator.String{
-					stringvalidator.OneOf(
-						client.DatabaseMongoDB,
-						client.DatabaseRedis,
-						client.DatabaseMySQL,
-						client.DatabasePostgreSQL,
-					),
-				},
+				PlanModifiers: reqReplaceStr(),
+				Validators:    []validator.String{stringvalidator.OneOf("mongodb", "redis", "mysql", "postgresql")},
+			},
+			"name": schema.StringAttribute{
+				Required:      true,
+				Description:   "Unique name of the cluster.",
+				PlanModifiers: reqReplaceStr(),
+			},
+			"size": schema.StringAttribute{
+				Required: true,
+				Description: "Instance size tier: `Micro`, `Small`, `Medium`, `Large`, `XLarge`, " +
+					"`X2XLarge`, or `X4XLarge`. Changing this scales the cluster in place.",
+				Validators: []validator.String{stringvalidator.OneOf(client.ValidSizes...)},
 			},
 			"version": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Engine version to deploy (for example `7.0`). Defaults to the ScaleGrid recommended version.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
-			},
-			"deployment_type": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Cluster topology: `standalone`, `replicaset`, `sharded`, or `cluster`.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
-				Validators: []validator.String{
-					stringvalidator.OneOf(
-						client.DeploymentStandalone,
-						client.DeploymentReplicaSet,
-						client.DeploymentSharded,
-						client.DeploymentCluster,
-					),
-				},
-			},
-			"cloud_profile_id": schema.StringAttribute{
 				Required:      true,
-				Description:   "ID of the cloud profile that determines the cloud provider and credentials used to provision the cluster.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Description:   "Database engine version. Use the `scalegrid_database_versions` data source to discover valid values.",
+				PlanModifiers: reqReplaceStr(),
 			},
-			"region": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Cloud region in which to deploy the cluster (for example `us-east-1`).",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown()},
-			},
-			"size_id": schema.StringAttribute{
+			"cloud_profile_names": schema.ListAttribute{
 				Required:    true,
-				Description: "Instance size identifier. Changing this scales the cluster in place.",
-			},
-			"disk_size_gb": schema.Int64Attribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Disk size in GB. Can be increased in place; decreases force replacement.",
-				PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
+				ElementType: types.StringType,
+				Description: "Names of the cloud profiles to deploy nodes into. The count should match " +
+					"the number of nodes (replicas/servers) across shards.",
+				PlanModifiers: []planmodifier.List{listRequiresReplace()},
 			},
 			"shard_count": schema.Int64Attribute{
 				Optional:      true,
-				Description:   "Number of shards (only applies to sharded deployments).",
-				PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()},
-			},
-			"ssl_enabled": schema.BoolAttribute{
-				Optional:      true,
 				Computed:      true,
-				Default:       booldefault.StaticBool(true),
-				Description:   "Whether SSL/TLS is enabled for client connections.",
-				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
+				Default:       int64default.StaticInt64(1),
+				Description:   "Number of shards. 1 for standalone/replica set; more for sharded. Redis cluster-mode requires 3 or 4.",
+				PlanModifiers: reqReplaceInt(),
 			},
-			"encryption_at_rest": schema.BoolAttribute{
+			"replica_count": schema.Int64Attribute{
+				Optional:      true,
+				Description:   "Nodes per shard for MongoDB/MySQL/PostgreSQL. 1 for standalone, more for replica set.",
+				PlanModifiers: reqReplaceInt(),
+			},
+			"server_count": schema.Int64Attribute{
+				Optional:      true,
+				Description:   "Nodes per shard for Redis. 1 for standalone.",
+				PlanModifiers: reqReplaceInt(),
+			},
+			"sentinel_count": schema.Int64Attribute{
+				Optional:      true,
+				Description:   "Number of Redis sentinel nodes (master/slave deployments).",
+				PlanModifiers: reqReplaceInt(),
+			},
+			"sentinel_cloud_profile_names": schema.ListAttribute{
+				Optional:      true,
+				ElementType:   types.StringType,
+				Description:   "Cloud profile names for Redis sentinels when sentinel_count exceeds server_count.",
+				PlanModifiers: []planmodifier.List{listRequiresReplace()},
+			},
+			"encrypt_disk": schema.BoolAttribute{
 				Optional:      true,
 				Computed:      true,
 				Default:       booldefault.StaticBool(false),
-				Description:   "Whether encryption at rest is enabled.",
+				Description:   "Encrypt the data disk.",
 				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
 			},
-			"tags": schema.ListAttribute{
+			"enable_ssl": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable SSL/TLS for client connections.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
+			},
+			"paused": schema.BoolAttribute{
 				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Optional list of tags applied to the cluster.",
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
+				Description: "Whether the cluster is paused. Toggling this pauses or resumes the cluster.",
 			},
 
-			"status": schema.StringAttribute{
-				Computed:    true,
-				Description: "Current lifecycle status of the cluster.",
+			// MongoDB-specific
+			"mongo_engine": schema.StringAttribute{
+				Optional:      true,
+				Description:   "MongoDB storage engine: `wiredtiger` (default) or `mmapv1`.",
+				PlanModifiers: reqReplaceStr(),
 			},
-			"host": schema.StringAttribute{
-				Computed:    true,
-				Description: "Primary hostname for connecting to the cluster.",
+			"compression_algo": schema.StringAttribute{
+				Optional:      true,
+				Description:   "MongoDB compression algorithm: `snappy`, `zlib`, or `zstd`.",
+				PlanModifiers: reqReplaceStr(),
 			},
-			"port": schema.Int64Attribute{
-				Computed:    true,
-				Description: "Port for connecting to the cluster.",
+
+			// Redis-specific
+			"cluster_mode": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable Redis cluster mode.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
 			},
-			"connection_string": schema.StringAttribute{
-				Computed:    true,
-				Sensitive:   true,
-				Description: "Connection string for the cluster.",
+			"backup_interval_hours": schema.Int64Attribute{
+				Optional:      true,
+				Description:   "Redis scheduled backup interval in hours (0 disables).",
+				PlanModifiers: reqReplaceInt(),
 			},
-			"created_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Timestamp at which the cluster was created.",
+			"maxmemory_policy": schema.StringAttribute{
+				Optional:      true,
+				Description:   "Redis eviction policy (e.g. `noeviction`, `allkeys-lru`).",
+				PlanModifiers: reqReplaceStr(),
 			},
+			"enable_rdb": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable Redis RDB snapshots.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
+			},
+			"enable_aof": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable Redis AOF persistence.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
+			},
+
+			// MySQL-specific
+			"replica_config": schema.Int64Attribute{
+				Optional:      true,
+				Description:   "MySQL replication: 0 standalone, 1 semisync, 2 async.",
+				PlanModifiers: reqReplaceInt(),
+			},
+
+			// PostgreSQL-specific
+			"replication_type": schema.StringAttribute{
+				Optional:      true,
+				Description:   "PostgreSQL replication type: `ASYNC` or `SYNC`.",
+				PlanModifiers: reqReplaceStr(),
+			},
+			"sync_commit_type": schema.StringAttribute{
+				Optional:      true,
+				Description:   "PostgreSQL synchronous commit type (e.g. `LOCAL`, `ON`, `REMOTE_WRITE`).",
+				PlanModifiers: reqReplaceStr(),
+			},
+			"enable_pgbouncer": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable PgBouncer connection pooling.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
+			},
+
+			// Computed
+			"status":             schema.StringAttribute{Computed: true, Description: "Current lifecycle status."},
+			"cluster_type":       schema.StringAttribute{Computed: true, Description: "Topology (Standalone, ReplicaSet, Sharded)."},
+			"disk_size_gb":       schema.Int64Attribute{Computed: true, Description: "Provisioned disk size in GB."},
+			"encryption_enabled": schema.BoolAttribute{Computed: true, Description: "Whether encryption at rest is active."},
+			"ssl_active":         schema.BoolAttribute{Computed: true, Description: "Whether SSL is active on the cluster."},
 		},
 	}
 }
@@ -197,44 +271,85 @@ func (r *clusterResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	tags, diags := tagsFromList(ctx, plan.Tags)
-	resp.Diagnostics.Append(diags...)
+	db, ok := parseDBTypeDiag(plan.Database.ValueString(), &resp.Diagnostics)
+	if !ok {
+		return
+	}
+
+	profileNames, d := stringsFromList(ctx, plan.CloudProfileNames)
+	resp.Diagnostics.Append(d...)
+	sentinelNames, d := stringsFromList(ctx, plan.SentinelProfiles)
+	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	createReq := client.ClusterCreateRequest{
-		Name:             plan.Name.ValueString(),
-		DatabaseType:     plan.DatabaseType.ValueString(),
-		Version:          stringValue(plan.Version),
-		DeploymentType:   stringValue(plan.DeploymentType),
-		CloudProfileID:   plan.CloudProfileID.ValueString(),
-		Region:           stringValue(plan.Region),
-		SizeID:           plan.SizeID.ValueString(),
-		DiskSizeGB:       plan.DiskSizeGB.ValueInt64(),
-		ShardCount:       plan.ShardCount.ValueInt64(),
-		SSLEnabled:       plan.SSLEnabled.ValueBool(),
-		EncryptionAtRest: plan.EncryptionAtRest.ValueBool(),
-		Tags:             tags,
+	poolIDs, err := r.resolveProfiles(ctx, profileNames)
+	if err != nil {
+		resp.Diagnostics.AddError("Error resolving cloud profiles", err.Error())
+		return
+	}
+	sentinelIDs, err := r.resolveProfiles(ctx, sentinelNames)
+	if err != nil {
+		resp.Diagnostics.AddError("Error resolving sentinel cloud profiles", err.Error())
+		return
 	}
 
-	cluster, err := r.client.CreateCluster(ctx, createReq)
+	in := client.CreateClusterInput{
+		DBType:                db,
+		Name:                  plan.Name.ValueString(),
+		Size:                  plan.Size.ValueString(),
+		Version:               plan.Version.ValueString(),
+		ShardCount:            int(plan.ShardCount.ValueInt64()),
+		ReplicaCount:          int(plan.ReplicaCount.ValueInt64()),
+		ServerCount:           int(plan.ServerCount.ValueInt64()),
+		SentinelCount:         int(plan.SentinelCount.ValueInt64()),
+		MachinePoolIDs:        poolIDs,
+		SentinelPools:         sentinelIDs,
+		EncryptDisk:           plan.EncryptDisk.ValueBool(),
+		EnableSSL:             plan.EnableSSL.ValueBool(),
+		MongoEngine:           stringValue(plan.MongoEngine),
+		CompressionAlgo:       stringValue(plan.CompressionAlgo),
+		ClusterMode:           plan.ClusterMode.ValueBool(),
+		BackupIntervalInHours: int(plan.BackupIntervalHours.ValueInt64()),
+		MaxMemoryPolicy:       stringValue(plan.MaxMemoryPolicy),
+		EnableRDB:             plan.EnableRDB.ValueBool(),
+		EnableAOF:             plan.EnableAOF.ValueBool(),
+		ReplicaConfig:         int(plan.ReplicaConfig.ValueInt64()),
+		ReplicationType:       stringValue(plan.ReplicationType),
+		SyncCommitType:        stringValue(plan.SyncCommitType),
+		EnablePgBouncer:       plan.EnablePgBouncer.ValueBool(),
+	}
+
+	clusterID, actionID, err := r.client.CreateCluster(ctx, in)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating cluster", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(clusterID)
+	// Persist the ID immediately so a failed wait still leaves a deletable resource.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), clusterID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), plan.Database)...)
 
-	tflog.Info(ctx, "created scalegrid cluster, waiting for it to become ready", map[string]any{"id": cluster.ID})
-
-	ready, err := r.client.WaitForClusterReady(ctx, cluster.ID, clusterPollInterval)
-	if err != nil {
-		resp.Diagnostics.AddError("Error waiting for cluster to become ready", err.Error())
-		// Persist the ID so a subsequent apply or destroy can reconcile.
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), cluster.ID)...)
+	tflog.Info(ctx, "waiting for cluster provisioning", map[string]any{"cluster_id": clusterID, "action_id": actionID})
+	if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
+		resp.Diagnostics.AddError("Error waiting for cluster provisioning", err.Error())
 		return
 	}
 
-	resp.Diagnostics.Append(r.mapClusterToState(ctx, ready, &plan)...)
+	if plan.Paused.ValueBool() {
+		if _, err := r.client.PauseCluster(ctx, db, clusterID); err != nil {
+			resp.Diagnostics.AddError("Error pausing cluster after creation", err.Error())
+			return
+		}
+	}
+
+	cluster, err := r.client.GetCluster(ctx, db, clusterID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading cluster after creation", err.Error())
+		return
+	}
+	r.mapComputed(cluster, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -244,8 +359,12 @@ func (r *clusterResource) Read(ctx context.Context, req resource.ReadRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	db, ok := parseDBTypeDiag(state.Database.ValueString(), &resp.Diagnostics)
+	if !ok {
+		return
+	}
 
-	cluster, err := r.client.GetCluster(ctx, state.ID.ValueString())
+	cluster, err := r.client.GetCluster(ctx, db, state.ID.ValueString())
 	if err != nil {
 		if client.IsNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -254,45 +373,60 @@ func (r *clusterResource) Read(ctx context.Context, req resource.ReadRequest, re
 		resp.Diagnostics.AddError("Error reading cluster", err.Error())
 		return
 	}
-
-	resp.Diagnostics.Append(r.mapClusterToState(ctx, cluster, &state)...)
+	r.mapComputed(cluster, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan clusterResourceModel
+	var plan, state clusterResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	tags, diags := tagsFromList(ctx, plan.Tags)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	db, ok := parseDBTypeDiag(plan.Database.ValueString(), &resp.Diagnostics)
+	if !ok {
 		return
 	}
+	id := state.ID.ValueString()
 
-	updateReq := client.ClusterUpdateRequest{
-		Name:       plan.Name.ValueString(),
-		SizeID:     plan.SizeID.ValueString(),
-		DiskSizeGB: plan.DiskSizeGB.ValueInt64(),
-		Tags:       tags,
+	if plan.Size.ValueString() != state.Size.ValueString() {
+		actionID, err := r.client.ScaleCluster(ctx, db, id, plan.Size.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error scaling cluster", err.Error())
+			return
+		}
+		if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
+			resp.Diagnostics.AddError("Error waiting for scale operation", err.Error())
+			return
+		}
 	}
 
-	if _, err := r.client.UpdateCluster(ctx, plan.ID.ValueString(), updateReq); err != nil {
-		resp.Diagnostics.AddError("Error updating cluster", err.Error())
-		return
+	if plan.Paused.ValueBool() != state.Paused.ValueBool() {
+		var actionID string
+		var err error
+		if plan.Paused.ValueBool() {
+			actionID, err = r.client.PauseCluster(ctx, db, id)
+		} else {
+			actionID, err = r.client.ResumeCluster(ctx, db, id)
+		}
+		if err != nil {
+			resp.Diagnostics.AddError("Error changing cluster power state", err.Error())
+			return
+		}
+		if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
+			resp.Diagnostics.AddError("Error waiting for pause/resume", err.Error())
+			return
+		}
 	}
 
-	// Scaling/disk changes are applied asynchronously; wait for the cluster to
-	// settle so computed attributes reflect reality.
-	cluster, err := r.client.WaitForClusterReady(ctx, plan.ID.ValueString(), clusterPollInterval)
+	cluster, err := r.client.GetCluster(ctx, db, id)
 	if err != nil {
-		resp.Diagnostics.AddError("Error waiting for cluster update", err.Error())
+		resp.Diagnostics.AddError("Error reading cluster after update", err.Error())
 		return
 	}
-
-	resp.Diagnostics.Append(r.mapClusterToState(ctx, cluster, &plan)...)
+	plan.ID = state.ID
+	r.mapComputed(cluster, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -302,89 +436,58 @@ func (r *clusterResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	db, ok := parseDBTypeDiag(state.Database.ValueString(), &resp.Diagnostics)
+	if !ok {
+		return
+	}
 
-	if err := r.client.DeleteCluster(ctx, state.ID.ValueString()); err != nil {
+	actionID, err := r.client.DeleteCluster(ctx, db, state.ID.ValueString(), true)
+	if err != nil {
 		if client.IsNotFound(err) {
 			return
 		}
 		resp.Diagnostics.AddError("Error deleting cluster", err.Error())
 		return
 	}
-
-	if err := r.client.WaitForClusterDeleted(ctx, state.ID.ValueString(), clusterPollInterval); err != nil {
+	if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
 		resp.Diagnostics.AddError("Error waiting for cluster deletion", err.Error())
-		return
 	}
 }
 
+// ImportState accepts "<database>:<cluster_id>".
 func (r *clusterResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
-}
-
-// mapClusterToState copies API data into the Terraform model, preserving plan
-// values for fields the API does not echo back.
-func (r *clusterResource) mapClusterToState(ctx context.Context, cluster *client.Cluster, model *clusterResourceModel) diagnosticsList {
-	var diags diagnosticsList
-
-	model.ID = types.StringValue(cluster.ID)
-	model.Name = types.StringValue(cluster.Name)
-	model.DatabaseType = types.StringValue(cluster.DatabaseType)
-	model.CloudProfileID = optionalString(cluster.CloudProfileID)
-	model.SizeID = types.StringValue(cluster.SizeID)
-	model.SSLEnabled = types.BoolValue(cluster.SSLEnabled)
-	model.EncryptionAtRest = types.BoolValue(cluster.EncryptionAtRest)
-
-	if cluster.Version != "" {
-		model.Version = types.StringValue(cluster.Version)
-	}
-	if cluster.DeploymentType != "" {
-		model.DeploymentType = types.StringValue(cluster.DeploymentType)
-	}
-	if cluster.Region != "" {
-		model.Region = types.StringValue(cluster.Region)
-	}
-	if cluster.DiskSizeGB > 0 {
-		model.DiskSizeGB = types.Int64Value(cluster.DiskSizeGB)
-	}
-	if cluster.ShardCount > 0 {
-		model.ShardCount = types.Int64Value(cluster.ShardCount)
-	}
-
-	model.Status = optionalString(cluster.Status)
-	model.Host = optionalString(cluster.Host)
-	model.Port = types.Int64Value(cluster.Port)
-	model.ConnectionString = optionalString(cluster.ConnectionString)
-	model.CreatedAt = optionalString(cluster.CreatedAt)
-
-	if len(cluster.Tags) > 0 {
-		list, d := tagsToList(ctx, cluster.Tags)
-		diags = append(diags, d...)
-		model.Tags = list
-	}
-
-	return diags
-}
-
-// boolRequiresReplace returns a plan modifier that forces replacement when a
-// boolean attribute changes. It wraps the generic RequiresReplace helper.
-func boolRequiresReplace() planmodifier.Bool {
-	return boolReplace{}
-}
-
-type boolReplace struct{}
-
-func (boolReplace) Description(context.Context) string {
-	return "Changing this value forces a new cluster."
-}
-func (boolReplace) MarkdownDescription(context.Context) string {
-	return "Changing this value forces a new cluster."
-}
-func (boolReplace) PlanModifyBool(_ context.Context, req planmodifier.BoolRequest, resp *planmodifier.BoolResponse) {
-	// No-op on create/destroy; only replace when a known prior value changes.
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	db, id, ok := splitImportID(req.ID)
+	if !ok {
+		resp.Diagnostics.AddError("Invalid import ID",
+			"Expected import ID in the form \"database:cluster_id\" (e.g. \"mongodb:abc123\").")
 		return
 	}
-	if !req.StateValue.Equal(req.PlanValue) {
-		resp.RequiresReplace = true
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
+}
+
+func (r *clusterResource) resolveProfiles(ctx context.Context, names []string) ([]string, error) {
+	ids := make([]string, 0, len(names))
+	for _, name := range names {
+		profile, err := r.client.FindCloudProfileByName(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, profile.ID)
+	}
+	return ids, nil
+}
+
+func (r *clusterResource) mapComputed(cluster *client.Cluster, model *clusterResourceModel) {
+	model.ID = types.StringValue(cluster.ID)
+	model.Status = optionalString(cluster.Status)
+	model.ClusterType = optionalString(cluster.ClusterType)
+	model.DiskSizeGB = types.Int64Value(cluster.DiskSizeGB)
+	model.EncryptionEnabled = types.BoolValue(cluster.EncryptionEnabled)
+	model.SSLActive = types.BoolValue(cluster.SSLEnabled)
+	if cluster.Size != "" {
+		if norm, ok := client.NormalizeSize(cluster.Size); ok {
+			model.Size = types.StringValue(norm)
+		}
 	}
 }

@@ -16,8 +16,10 @@ func TestProviderSchemaValid(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("provider schema diagnostics: %v", resp.Diagnostics)
 	}
-	if _, ok := resp.Schema.Attributes["api_key"]; !ok {
-		t.Error("expected api_key attribute on provider schema")
+	for _, attr := range []string{"email", "password", "base_url", "two_factor_code"} {
+		if _, ok := resp.Schema.Attributes[attr]; !ok {
+			t.Errorf("expected provider attribute %q", attr)
+		}
 	}
 	if diags := resp.Schema.ValidateImplementation(context.Background()); diags.HasError() {
 		t.Fatalf("provider schema invalid: %v", diags)
@@ -25,13 +27,12 @@ func TestProviderSchemaValid(t *testing.T) {
 }
 
 func TestResourceSchemasValid(t *testing.T) {
-	resources := []func() resource.Resource{
-		NewClusterResource,
-		NewFirewallRuleResource,
-		NewCloudProfileResource,
-		NewBackupResource,
+	p := New("test")().(*ScaleGridProvider)
+	ctors := p.Resources(context.Background())
+	if len(ctors) != 6 {
+		t.Errorf("expected 6 resources, got %d", len(ctors))
 	}
-	for _, ctor := range resources {
+	for _, ctor := range ctors {
 		r := ctor()
 		resp := &resource.SchemaResponse{}
 		r.Schema(context.Background(), resource.SchemaRequest{}, resp)
@@ -46,12 +47,12 @@ func TestResourceSchemasValid(t *testing.T) {
 }
 
 func TestDataSourceSchemasValid(t *testing.T) {
-	sources := []func() datasource.DataSource{
-		NewClusterDataSource,
-		NewClustersDataSource,
-		NewCloudProfileDataSource,
+	p := New("test")().(*ScaleGridProvider)
+	ctors := p.DataSources(context.Background())
+	if len(ctors) != 5 {
+		t.Errorf("expected 5 data sources, got %d", len(ctors))
 	}
-	for _, ctor := range sources {
+	for _, ctor := range ctors {
 		ds := ctor()
 		resp := &datasource.SchemaResponse{}
 		ds.Schema(context.Background(), datasource.SchemaRequest{}, resp)
@@ -65,6 +66,15 @@ func TestDataSourceSchemasValid(t *testing.T) {
 	}
 }
 
-func TestProviderImplementsInterface(t *testing.T) {
-	var _ provider.Provider = New("test")()
+func TestSplitImportID(t *testing.T) {
+	db, id, ok := splitImportID("mongodb:abc123")
+	if !ok || db != "mongodb" || id != "abc123" {
+		t.Errorf("unexpected: %q %q %v", db, id, ok)
+	}
+	if _, _, ok := splitImportID("noseparator"); ok {
+		t.Error("expected failure for missing separator")
+	}
+	if parts := splitN("a:b:c", 3); parts == nil || parts[2] != "c" {
+		t.Errorf("splitN failed: %v", parts)
+	}
 }

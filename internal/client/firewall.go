@@ -5,43 +5,25 @@ import (
 	"net/http"
 )
 
-// ListFirewallRules returns the firewall rules attached to a cluster.
-func (c *Client) ListFirewallRules(ctx context.Context, clusterID string) ([]FirewallRule, error) {
-	var resp firewallRuleListResponse
-	if err := c.do(ctx, http.MethodGet, "/clusters/"+clusterID+"/firewall_rules", nil, &resp); err != nil {
+// GetFirewallRules returns the cluster-level IP whitelist (CIDR list).
+func (c *Client) GetFirewallRules(ctx context.Context, db DBType, clusterID string) ([]string, error) {
+	var resp firewallResponse
+	body := map[string]any{"clusterID": clusterID, "dbType": db.WireType()}
+	if err := c.do(ctx, http.MethodPost, "/Clusters/getClusterLevelIPWhiteList", body, &resp); err != nil {
 		return nil, err
 	}
-	return resp.Rules, nil
+	return resp.CIDRList, nil
 }
 
-// GetFirewallRule fetches a single firewall rule by ID.
-func (c *Client) GetFirewallRule(ctx context.Context, clusterID, id string) (*FirewallRule, error) {
-	var rule FirewallRule
-	if err := c.do(ctx, http.MethodGet, "/clusters/"+clusterID+"/firewall_rules/"+id, nil, &rule); err != nil {
-		return nil, err
+// SetFirewallRules replaces the cluster-level IP whitelist. The console requires
+// two calls: one to record the cluster-level list and one to apply it.
+func (c *Client) SetFirewallRules(ctx context.Context, db DBType, clusterID string, cidrs []string) error {
+	if cidrs == nil {
+		cidrs = []string{}
 	}
-	return &rule, nil
-}
-
-// CreateFirewallRule adds a CIDR allow rule to a cluster.
-func (c *Client) CreateFirewallRule(ctx context.Context, clusterID string, rule FirewallRule) (*FirewallRule, error) {
-	var created FirewallRule
-	if err := c.do(ctx, http.MethodPost, "/clusters/"+clusterID+"/firewall_rules", rule, &created); err != nil {
-		return nil, err
+	body := map[string]any{"clusterID": clusterID, "dbType": db.WireType(), "cidrList": cidrs}
+	if err := c.do(ctx, http.MethodPost, "/Clusters/setClusterLevelIPWhiteList", body, nil); err != nil {
+		return err
 	}
-	return &created, nil
-}
-
-// UpdateFirewallRule modifies an existing firewall rule.
-func (c *Client) UpdateFirewallRule(ctx context.Context, clusterID, id string, rule FirewallRule) (*FirewallRule, error) {
-	var updated FirewallRule
-	if err := c.do(ctx, http.MethodPatch, "/clusters/"+clusterID+"/firewall_rules/"+id, rule, &updated); err != nil {
-		return nil, err
-	}
-	return &updated, nil
-}
-
-// DeleteFirewallRule removes a firewall rule from a cluster.
-func (c *Client) DeleteFirewallRule(ctx context.Context, clusterID, id string) error {
-	return c.do(ctx, http.MethodDelete, "/clusters/"+clusterID+"/firewall_rules/"+id, nil, nil)
+	return c.do(ctx, http.MethodPost, "/Clusters/configureIPWhiteList", body, nil)
 }

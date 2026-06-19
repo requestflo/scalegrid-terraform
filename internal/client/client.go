@@ -1,6 +1,12 @@
-// Package client implements a thin Go client for the ScaleGrid REST API
-// (https://scalegrid.io/api/). It is intentionally self-contained so it can be
-// reused outside of the Terraform provider and unit tested in isolation.
+// Package client implements a Go client for the ScaleGrid API as exposed by the
+// ScaleGrid console (https://console.scalegrid.io) and used by the official
+// ScaleGrid CLI. The API is session/cookie based: callers authenticate with an
+// account email + password via POST /login, and subsequent requests carry the
+// returned session cookie.
+//
+// Responses use a common envelope: every body contains an "error" object whose
+// "code" is "Success" on success. Asynchronous operations additionally return
+// an "actionID" that can be polled via GET /actions/{id}.
 package client
 
 import (
@@ -11,80 +17,114 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 )
 
 const (
-	// DefaultBaseURL is the public ScaleGrid API endpoint. It can be
-	// overridden through Config.BaseURL (for example to target a dedicated or
-	// staging environment).
-	DefaultBaseURL = "https://api.scalegrid.io/v1"
+	// DefaultBaseURL is the ScaleGrid console endpoint used by the CLI.
+	DefaultBaseURL = "https://console.scalegrid.io"
 
 	// DefaultTimeout is the per-request HTTP timeout.
-	DefaultTimeout = 60 * time.Second
+	DefaultTimeout = 90 * time.Second
 
-	defaultUserAgent = "terraform-provider-scalegrid"
+	userAgentBase = "terraform-provider-scalegrid"
 )
 
-// AuthMode selects how requests are authenticated against the ScaleGrid API.
-type AuthMode string
-
-const (
-	// AuthBasic uses HTTP Basic authentication with the account email as the
-	// username and the API key as the password. This is the default scheme
-	// used by the ScaleGrid API.
-	AuthBasic AuthMode = "basic"
-
-	// AuthBearer sends the API key/token as a Bearer token in the
-	// Authorization header.
-	AuthBearer AuthMode = "bearer"
-)
-
-// Config holds everything required to build a Client.
+// Config holds everything required to build and authenticate a Client.
 type Config struct {
-	// BaseURL is the API root. Defaults to DefaultBaseURL when empty.
+	// BaseURL is the console root. Defaults to DefaultBaseURL when empty.
 	BaseURL string
 
-	// Email is the ScaleGrid account email. Required for AuthBasic.
-	Email string
+	// Email and Password authenticate the ScaleGrid account.
+	Email    string
+	Password string
 
-	// APIKey is the secret API key generated from the ScaleGrid console.
-	APIKey string
+	// TwoFactorCode is an optional TOTP/2FA code. It is only valid at the
+	// moment of login, so it is generally only useful for one-shot runs.
+	TwoFactorCode string
 
-	// AuthMode selects the authentication scheme. Defaults to AuthBasic.
-	AuthMode AuthMode
-
-	// UserAgent is appended to the default User-Agent string.
+	// UserAgent is prepended to the default User-Agent string.
 	UserAgent string
 
-	// HTTPClient lets callers inject a custom *http.Client (timeouts,
-	// transports, test servers). Defaults to a client with DefaultTimeout.
+	// HTTPClient lets callers inject a custom *http.Client (test servers,
+	// proxies). A cookie jar is added automatically if the client lacks one.
 	HTTPClient *http.Client
+
+	// SkipLogin is used by tests to construct a Client without performing the
+	// login round-trip.
+	SkipLogin bool
 }
 
-// Client talks to the ScaleGrid REST API.
+// Client talks to the ScaleGrid console API.
 type Client struct {
 	baseURL    string
-	email      string
-	apiKey     string
-	authMode   AuthMode
 	userAgent  string
 	httpClient *http.Client
 }
 
-// NewClient validates the supplied configuration and returns a ready Client.
-func NewClient(cfg Config) (*Client, error) {
-	if cfg.APIKey == "" {
-		return nil, errors.New("scalegrid: an API key is required")
-	}
+// sgError mirrors the "error" envelope returned on every ScaleGrid response.
+type sgError struct {
+	Code                    string `json:"code"`
+	ErrorMessageWithDetails string `json:"errorMessageWithDetails"`
+	RecommendedAction       string `json:"recommendedAction"`
+}
 
-	mode := cfg.AuthMode
-	if mode == "" {
-		mode = AuthBasic
+// errorEnvelope is used to peek at the error code before decoding the payload.
+type errorEnvelope struct {
+	Error sgError `json:"error"`
+}
+
+// codeSuccess and the restart-warning codes are treated as non-fatal, matching
+// the CLI's behaviour.
+const (
+	codeSuccess               = "Success"
+	codePostgreSQLRestartWarn = "PostgreSQLRestartWarning"
+	codeMySQLRestartWarn      = "MySQLRestartWarning"
+)
+
+// APIError represents a ScaleGrid error response.
+type APIError struct {
+	Code              string
+	Message           string
+	RecommendedAction string
+	StatusCode        int
+}
+
+func (e *APIError) Error() string {
+	msg := e.Message
+	if msg == "" {
+		msg = e.Code
 	}
-	if mode == AuthBasic && cfg.Email == "" {
-		return nil, errors.New("scalegrid: an account email is required for basic authentication")
+	if e.RecommendedAction != "" {
+		return fmt.Sprintf("scalegrid: %s (code %q): %s", msg, e.Code, e.RecommendedAction)
+	}
+	return fmt.Sprintf("scalegrid: %s (code %q)", msg, e.Code)
+}
+
+// IsNotFound reports whether err indicates a missing resource. ScaleGrid does
+// not use HTTP 404; not-found conditions surface as error codes/messages, so we
+// match on well-known substrings.
+func IsNotFound(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	hay := strings.ToLower(apiErr.Code + " " + apiErr.Message)
+	return strings.Contains(hay, "notfound") ||
+		strings.Contains(hay, "not found") ||
+		strings.Contains(hay, "was not found") ||
+		strings.Contains(hay, "does not exist")
+}
+
+// NewClient validates configuration, performs login (unless SkipLogin), and
+// returns a ready Client.
+func NewClient(ctx context.Context, cfg Config) (*Client, error) {
+	if cfg.Email == "" || cfg.Password == "" {
+		if !cfg.SkipLogin {
+			return nil, errors.New("scalegrid: email and password are required")
+		}
 	}
 
 	baseURL := cfg.BaseURL
@@ -97,54 +137,54 @@ func NewClient(cfg Config) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: DefaultTimeout}
 	}
-
-	ua := defaultUserAgent
-	if cfg.UserAgent != "" {
-		ua = fmt.Sprintf("%s %s", cfg.UserAgent, defaultUserAgent)
+	if httpClient.Jar == nil {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			return nil, fmt.Errorf("scalegrid: creating cookie jar: %w", err)
+		}
+		httpClient.Jar = jar
 	}
 
-	return &Client{
+	ua := userAgentBase
+	if cfg.UserAgent != "" {
+		ua = cfg.UserAgent + " " + userAgentBase
+	}
+
+	c := &Client{
 		baseURL:    baseURL,
-		email:      cfg.Email,
-		apiKey:     cfg.APIKey,
-		authMode:   mode,
 		userAgent:  ua,
 		httpClient: httpClient,
-	}, nil
-}
-
-// APIError represents a non-2xx response from the ScaleGrid API.
-type APIError struct {
-	StatusCode int    `json:"-"`
-	Message    string `json:"message"`
-	Errors     string `json:"errors,omitempty"`
-	RawBody    string `json:"-"`
-}
-
-func (e *APIError) Error() string {
-	msg := e.Message
-	if msg == "" {
-		msg = e.Errors
 	}
-	if msg == "" {
-		msg = e.RawBody
+
+	if cfg.SkipLogin {
+		return c, nil
 	}
-	return fmt.Sprintf("scalegrid api error (status %d): %s", e.StatusCode, msg)
+	if err := c.login(ctx, cfg.Email, cfg.Password, cfg.TwoFactorCode); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
-// IsNotFound reports whether err is an APIError with a 404 status code. It is
-// used by the provider to remove resources from state when they vanish.
-func IsNotFound(err error) bool {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		return apiErr.StatusCode == http.StatusNotFound
+// login authenticates and stores the session cookie in the client's jar.
+func (c *Client) login(ctx context.Context, email, password, twoFactor string) error {
+	body := map[string]string{"username": email, "password": password}
+	if twoFactor != "" {
+		body["inputCode"] = twoFactor
 	}
-	return false
+
+	var env errorEnvelope
+	if err := c.do(ctx, http.MethodPost, "/login", body, &env); err != nil {
+		return err
+	}
+	if env.Error.Code == "TwoFactorAuthNeeded" {
+		return errors.New("scalegrid: two-factor authentication required; supply two_factor_code " +
+			"(note: TOTP codes expire quickly) or disable 2FA on the automation account")
+	}
+	return nil
 }
 
-// do performs an HTTP request against path (relative to the base URL),
-// JSON-encoding body when non-nil and JSON-decoding the response into out when
-// non-nil. It returns an *APIError for non-2xx responses.
+// do performs an HTTP request and decodes the response into out, returning an
+// *APIError when the response envelope reports a non-success code.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reqBody io.Reader
 	if body != nil {
@@ -155,18 +195,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		reqBody = bytes.NewReader(encoded)
 	}
 
-	url := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
 		return fmt.Errorf("scalegrid: building request: %w", err)
 	}
-
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	c.authenticate(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -174,36 +211,50 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("scalegrid: reading response body: %w", err)
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parseAPIError(resp.StatusCode, respBytes)
+	// Some endpoints (e.g. logout via redirect) return no JSON body.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		if resp.StatusCode >= 400 {
+			return &APIError{Code: "HTTPError", Message: resp.Status, StatusCode: resp.StatusCode}
+		}
+		return nil
 	}
 
-	if out != nil && len(respBytes) > 0 {
-		if err := json.Unmarshal(respBytes, out); err != nil {
-			return fmt.Errorf("scalegrid: decoding response: %w", err)
+	var env errorEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		// Body is not the standard envelope; treat HTTP status as authoritative.
+		if resp.StatusCode >= 400 {
+			return &APIError{Code: "HTTPError", Message: string(raw), StatusCode: resp.StatusCode}
+		}
+		return fmt.Errorf("scalegrid: decoding response: %w", err)
+	}
+
+	if !isSuccessCode(env.Error.Code) {
+		return &APIError{
+			Code:              env.Error.Code,
+			Message:           env.Error.ErrorMessageWithDetails,
+			RecommendedAction: env.Error.RecommendedAction,
+			StatusCode:        resp.StatusCode,
+		}
+	}
+
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("scalegrid: decoding response payload: %w", err)
 		}
 	}
 	return nil
 }
 
-func (c *Client) authenticate(req *http.Request) {
-	switch c.authMode {
-	case AuthBearer:
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	default: // AuthBasic
-		req.SetBasicAuth(c.email, c.apiKey)
+func isSuccessCode(code string) bool {
+	switch code {
+	case codeSuccess, codePostgreSQLRestartWarn, codeMySQLRestartWarn, "":
+		return true
+	default:
+		return false
 	}
-}
-
-func parseAPIError(status int, body []byte) error {
-	apiErr := &APIError{StatusCode: status, RawBody: string(body)}
-	// Best-effort decode of a structured error payload; ignore failures and
-	// fall back to the raw body.
-	_ = json.Unmarshal(body, apiErr)
-	return apiErr
 }

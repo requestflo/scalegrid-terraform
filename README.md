@@ -2,32 +2,49 @@
 
 A Terraform provider for [ScaleGrid](https://scalegrid.io) — manage MongoDB,
 Redis, MySQL, and PostgreSQL database deployments (and their cloud profiles,
-firewall rules, and backups) as code through the
-[ScaleGrid REST API](https://scalegrid.io/api/).
+firewall whitelists, backups, alert rules, and follower relationships) as code.
 
 Built with the [Terraform Plugin Framework](https://developer.hashicorp.com/terraform/plugin/framework)
 (protocol 6).
 
-## Features
+## How this maps to the ScaleGrid API
 
-**Resources**
+ScaleGrid does not publish an open REST API behind an API key. The automation
+surface is the ScaleGrid **console API** (`console.scalegrid.io`), the same API
+driven by the official `sg-cli` tool: you authenticate with your account email
+and password (cookie session), operations return an `actionID` you poll to
+completion, and endpoints are per-engine (`/MongoClusters/create`,
+`/RedisClusters/list`, …). This provider is implemented directly against that
+API, so its capabilities mirror what `sg-cli` (and the console) can do.
 
-| Resource | Description |
-|----------|-------------|
-| `scalegrid_cluster` | A database deployment (MongoDB / Redis / MySQL / PostgreSQL). Provisioning is awaited; scaling and disk growth are applied in place. |
-| `scalegrid_cloud_profile` | Cloud credentials for Bring Your Own Cloud deployments (AWS, Azure, GCP, DigitalOcean, OCI, VMware). |
-| `scalegrid_firewall_rule` | A CIDR allow rule attached to a cluster. |
-| `scalegrid_backup` | An on-demand backup of a cluster. |
+## Coverage
 
-**Data sources**
+The provider exposes the declarative (desired-state) portion of the ScaleGrid
+API. Every CLI capability that represents managed state is covered:
 
-| Data source | Description |
-|-------------|-------------|
-| `scalegrid_cluster` | Look up a single cluster by ID. |
-| `scalegrid_clusters` | List clusters, optionally filtered by database type. |
-| `scalegrid_cloud_profile` | Look up a cloud profile by ID or name. |
+| Area | CLI commands | Provider |
+|------|--------------|----------|
+| Clusters (create/read/delete) | `create-cluster`, `list-clusters`, `delete-cluster` | `scalegrid_cluster` |
+| Scale in place | `scale-up` | `scalegrid_cluster.size` |
+| Pause / resume | `pause-cluster`, `resume-cluster` | `scalegrid_cluster.paused` |
+| Cloud profiles (AWS) | `create-cloud-profile`, `list-cloud-profiles`, `delete-cloud-profile`, `update-cloud-profile-keys` | `scalegrid_cloud_profile` |
+| Firewall whitelist | `set-firewall-rules`, `get-firewall-rules` | `scalegrid_firewall` |
+| On-demand backups | `start-backup`, `delete-backup`, `list-backups` | `scalegrid_backup` |
+| Alert rules | `create-alert-rule`, `list-alert-rules`, `delete-alert-rule` | `scalegrid_alert_rule` |
+| Followers | `setup-follower`, `get-follower-status`, `stop-following` | `scalegrid_follower` |
+| Credentials | `get-cluster-credentials` | `scalegrid_cluster_credentials` (data source) |
+| Available versions | `get-available-db-versions` | `scalegrid_database_versions` (data source) |
 
-All resources support `terraform import`.
+**Intentionally out of scope** are imperative, one-shot maintenance actions that
+do not represent persistent desired state and therefore do not fit Terraform's
+model: `patch-os`, `upgrade-agent`, `compact`, `refresh-cluster`,
+`reset-credentials`, `restore-backup`, `sync-follower`, `resolve-alerts`,
+`build-index`, `add-column`/`add-index`, and live config edits
+(`update-config`, `set-pgbouncer`). These are better run via `sg-cli` or a
+`null_resource`/provisioner when needed.
+
+Azure cloud profiles are not managed because creating one requires interactively
+running a generated permission-granting script; AWS profiles are fully supported.
 
 ## Usage
 
@@ -42,69 +59,60 @@ terraform {
 }
 
 provider "scalegrid" {
-  email   = "you@example.com"
-  api_key = var.scalegrid_api_key
+  email    = "you@example.com"
+  password = var.scalegrid_password
 }
 
 resource "scalegrid_cloud_profile" "aws" {
-  name           = "aws-production"
-  cloud_provider = "aws"
-  region         = "us-east-1"
-  access_key     = var.aws_access_key
-  secret_key     = var.aws_secret_key
+  database            = "mongodb"
+  name                = "aws-use1-a"
+  region              = "us-east-1"
+  access_key          = var.aws_access_key
+  secret_key          = var.aws_secret_key
+  vpc_id              = "vpc-0123456789abcdef0"
+  subnet_id           = "subnet-0123456789abcdef0"
+  vpc_cidr            = "10.0.0.0/16"
+  subnet_cidr         = "10.0.1.0/24"
+  security_group_id   = "sg-0123456789abcdef0"
+  security_group_name = "scalegrid-mongo"
 }
 
 resource "scalegrid_cluster" "mongo" {
-  name             = "production-mongo"
-  database_type    = "mongodb"
-  version          = "7.0"
-  deployment_type  = "replicaset"
-  cloud_profile_id = scalegrid_cloud_profile.aws.id
-  region           = "us-east-1"
-  size_id          = "AWS_M5_LARGE"
-  disk_size_gb     = 100
+  database            = "mongodb"
+  name                = "production-mongo"
+  size                = "Small"
+  version             = "7.0"
+  shard_count         = 1
+  replica_count       = 3
+  cloud_profile_names = [scalegrid_cloud_profile.aws.name]
+  enable_ssl          = true
 }
 
-resource "scalegrid_firewall_rule" "office" {
+resource "scalegrid_firewall" "mongo" {
+  database   = "mongodb"
   cluster_id = scalegrid_cluster.mongo.id
-  cidr       = "203.0.113.0/24"
+  cidr_list  = ["203.0.113.0/24"]
 }
 ```
 
-More examples live under [`examples/`](./examples) and reference docs under
+More examples are under [`examples/`](./examples); reference docs under
 [`docs/`](./docs).
 
 ## Authentication
 
-Generate an API key in the ScaleGrid console (Account → API Keys). Configuration
-can come from the provider block or environment variables:
+The provider logs in to the ScaleGrid console with email + password and reuses
+the session cookie. Configure via the provider block or environment:
 
-| Argument    | Environment variable  | Default |
-|-------------|-----------------------|---------|
-| `email`     | `SCALEGRID_EMAIL`     | — |
-| `api_key`   | `SCALEGRID_API_KEY`   | — |
-| `auth_mode` | `SCALEGRID_AUTH_MODE` | `basic` |
-| `base_url`  | `SCALEGRID_BASE_URL`  | `https://api.scalegrid.io/v1` |
+| Argument          | Environment variable        | Default |
+|-------------------|-----------------------------|---------|
+| `email`           | `SCALEGRID_EMAIL`           | — |
+| `password`        | `SCALEGRID_PASSWORD`        | — |
+| `two_factor_code` | `SCALEGRID_TWO_FACTOR_CODE` | — |
+| `base_url`        | `SCALEGRID_BASE_URL`        | `https://console.scalegrid.io` |
 
-`auth_mode` selects between `basic` (email + API key via HTTP Basic auth) and
-`bearer` (API key as a bearer token).
-
-## API endpoint assumptions
-
-ScaleGrid's public API reference is gated behind login, so this provider models
-the API surface against ScaleGrid's documented resource model. The two pieces
-most likely to need adjustment for a specific account are centralized so they can
-be changed without touching resource logic:
-
-- **Base URL** — set `base_url` (or `SCALEGRID_BASE_URL`) to match the endpoint
-  your account uses.
-- **Authentication scheme** — switch `auth_mode` between `basic` and `bearer`.
-
-The concrete request paths live in [`internal/client`](./internal/client)
-(`/clusters`, `/clusters/{id}/firewall_rules`, `/cloud_profiles`,
-`/clusters/{id}/backups`, `/jobs/{id}`). They are isolated in that package so
-the Terraform-facing schema does not change if a path needs tweaking. If you
-have access to the authoritative API reference, verify these against it.
+**Two-factor auth:** TOTP codes expire within seconds, so `two_factor_code` is
+only practical for one-shot runs. For unattended automation use an account with
+2FA disabled. Set `base_url` for a dedicated/on-prem controller.
 
 ## Development
 
@@ -112,14 +120,13 @@ Requires Go 1.23+.
 
 ```sh
 make build      # compile the provider
-make test       # run unit tests
+make test       # unit tests
 make vet        # go vet
 make fmt        # gofmt
 make install    # build + install into ~/.terraform.d/plugins for local testing
 ```
 
-To use a locally built provider, add a [dev override](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers)
-to `~/.terraformrc`:
+To use a local build, add a dev override to `~/.terraformrc`:
 
 ```hcl
 provider_installation {
@@ -132,25 +139,27 @@ provider_installation {
 
 ### Testing
 
-Unit tests cover the API client (request shaping, auth headers, error handling,
-polling) and validate every resource/data-source schema:
+Unit tests use an `httptest` server that emulates the ScaleGrid envelope and
+cover login (incl. 2FA), the error/not-found contract, cluster creation, action
+polling, and firewall round-trips, plus schema validation for every resource and
+data source:
 
 ```sh
 go test ./...
 ```
 
-Acceptance tests (`make testacc`) run against a live ScaleGrid account and create
-real, billable resources. They are gated behind `TF_ACC=1`.
+`make testacc` runs acceptance tests against a live account (creates real,
+billable resources; gated behind `TF_ACC=1`).
 
 ## Repository layout
 
 ```
 .
-├── main.go                     # provider entrypoint
+├── main.go                 # provider entrypoint
 ├── internal/
-│   ├── client/                 # ScaleGrid REST API client (no Terraform deps)
-│   └── provider/               # provider, resources, and data sources
-├── docs/                       # registry documentation
-├── examples/                   # example Terraform configurations
-└── .github/workflows/          # CI and release pipelines
+│   ├── client/             # ScaleGrid console API client (no Terraform deps)
+│   └── provider/           # provider, resources, and data sources
+├── docs/                   # registry documentation
+├── examples/               # example configurations
+└── .github/workflows/      # CI and release pipelines
 ```

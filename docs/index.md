@@ -1,14 +1,14 @@
 ---
 page_title: "ScaleGrid Provider"
 description: |-
-  The ScaleGrid provider manages database deployments (MongoDB, Redis, MySQL, PostgreSQL) through the ScaleGrid REST API.
+  Manage ScaleGrid database deployments (MongoDB, Redis, MySQL, PostgreSQL) through the ScaleGrid console API.
 ---
 
 # ScaleGrid Provider
 
-The ScaleGrid provider is used to manage [ScaleGrid](https://scalegrid.io) database
-deployments and related resources (cloud profiles, firewall rules, backups)
-through the [ScaleGrid REST API](https://scalegrid.io/api/).
+The ScaleGrid provider manages [ScaleGrid](https://scalegrid.io) database
+deployments and related resources through the ScaleGrid console API (the same
+API used by the official `sg-cli` tool).
 
 ## Example Usage
 
@@ -23,34 +23,41 @@ terraform {
 }
 
 provider "scalegrid" {
-  email   = "you@example.com"
-  api_key = var.scalegrid_api_key
+  email    = "you@example.com"
+  password = var.scalegrid_password
 }
 ```
 
 ## Authentication
 
-Generate an API key from the ScaleGrid console (Account → API Keys). The provider
-supports two authentication schemes, controlled by `auth_mode`:
+The provider authenticates against the ScaleGrid console
+(`https://console.scalegrid.io`) with your account **email and password**,
+establishing a session cookie — the same flow as `sg-cli login`. There is no
+API-key scheme.
 
-* `basic` (default) — HTTP Basic authentication using your account `email` as the
-  username and the `api_key` as the password.
-* `bearer` — sends the `api_key` as a bearer token.
+| Argument          | Environment variable        |
+|-------------------|-----------------------------|
+| `email`           | `SCALEGRID_EMAIL`           |
+| `password`        | `SCALEGRID_PASSWORD`        |
+| `two_factor_code` | `SCALEGRID_TWO_FACTOR_CODE` |
+| `base_url`        | `SCALEGRID_BASE_URL`        |
 
-Credentials may be supplied in the provider block or via environment variables:
+### Two-factor authentication
 
-| Argument    | Environment variable   |
-|-------------|------------------------|
-| `email`     | `SCALEGRID_EMAIL`      |
-| `api_key`   | `SCALEGRID_API_KEY`    |
-| `auth_mode` | `SCALEGRID_AUTH_MODE`  |
-| `base_url`  | `SCALEGRID_BASE_URL`   |
+If the account has 2FA enabled, login requires a current TOTP code via
+`two_factor_code`. Because TOTP codes expire within seconds, this is only
+practical for one-shot runs. For unattended automation, use a dedicated account
+with 2FA disabled.
+
+### Dedicated / on-prem controllers
+
+Set `base_url` to your controller's URL if you do not use the public console.
 
 ## Schema
 
 ### Optional
 
-- `base_url` (String) Base URL of the ScaleGrid API. Defaults to `https://api.scalegrid.io/v1`.
-- `email` (String) ScaleGrid account email, used as the username for basic authentication.
-- `api_key` (String, Sensitive) ScaleGrid API key generated from the console.
-- `auth_mode` (String) Authentication scheme: `basic` (default) or `bearer`.
+- `email` (String) ScaleGrid account email.
+- `password` (String, Sensitive) ScaleGrid account password.
+- `two_factor_code` (String, Sensitive) One-time TOTP code (see above).
+- `base_url` (String) Console base URL. Defaults to `https://console.scalegrid.io`.

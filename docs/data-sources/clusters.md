@@ -1,28 +1,29 @@
 ---
 page_title: "scalegrid_clusters Data Source - terraform-provider-scalegrid"
 description: |-
-  Lists ScaleGrid clusters on the account, optionally filtered by database type.
+  Lists all ScaleGrid clusters of a given database engine.
 ---
 
 # scalegrid_clusters (Data Source)
 
-Lists ScaleGrid clusters on the account, optionally filtered by database type.
+Lists all ScaleGrid clusters of a given database engine.
 
 ## Example Usage
 
 ```terraform
 data "scalegrid_clusters" "postgres" {
-  database_type = "postgresql"
+  database = "postgresql"
 }
 ```
 
 ## Schema
 
-### Optional
+### Required
 
-- `database_type` (String) If set, only clusters with this database engine are returned.
+- `database` (String) Engine: `mongodb`, `redis`, `mysql`, or `postgresql`.
 
 ### Read-Only
 
-- `clusters` (List of Object) The list of clusters. Each element exposes the same
-  read-only attributes as the `scalegrid_cluster` data source.
+- `clusters` (List of Object) Each element exposes `id`, `name`, `status`,
+  `size`, `version`, `cluster_type`, `disk_size_gb`, `ssl_enabled`, and
+  `encryption_enabled`.

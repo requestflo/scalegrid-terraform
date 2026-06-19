@@ -6,13 +6,17 @@ description: |-
 
 # scalegrid_backup (Resource)
 
-Triggers and manages an on-demand backup of a ScaleGrid cluster.
+Triggers and manages an on-demand backup of a ScaleGrid cluster. All
+configurable attributes are immutable; changing them creates a new backup.
 
 ## Example Usage
 
 ```terraform
 resource "scalegrid_backup" "snapshot" {
+  database   = "mongodb"
   cluster_id = scalegrid_cluster.mongo.id
+  name       = "pre-migration-snapshot"
+  comment    = "Taken before the v2 migration"
 }
 ```
 
@@ -20,18 +24,17 @@ resource "scalegrid_backup" "snapshot" {
 
 ### Required
 
-- `cluster_id` (String) ID of the cluster to back up. Forces replacement.
+- `database` (String) Engine of the cluster. Forces replacement.
+- `cluster_id` (String) Cluster ID. Forces replacement.
+- `name` (String) Unique backup name. Forces replacement.
+
+### Optional
+
+- `comment` (String) Backup description. Forces replacement.
+- `target` (String) For replica sets, which node to back up (`PRIMARY`/`SECONDARY` or `MASTER`/`SLAVE`). Forces replacement.
 
 ### Read-Only
 
-- `id` (String) Unique identifier of the backup.
-- `status` (String) Status of the backup.
-- `size_bytes` (Number) Size of the backup in bytes.
-- `type` (String) Type of the backup.
-- `created_at` (String) Creation timestamp.
-
-## Import
-
-```shell
-terraform import scalegrid_backup.snapshot <cluster_id>:<backup_id>
-```
+- `id` (String) Backup ID.
+- `type` (String) Backup type.
+- `created` (Number) Creation timestamp (epoch milliseconds).

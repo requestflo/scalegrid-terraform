@@ -4,10 +4,13 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -22,26 +25,28 @@ var (
 )
 
 // NewCloudProfileResource is the constructor registered with the provider.
-func NewCloudProfileResource() resource.Resource {
-	return &cloudProfileResource{}
-}
+func NewCloudProfileResource() resource.Resource { return &cloudProfileResource{} }
 
 type cloudProfileResource struct {
 	client *client.Client
 }
 
 type cloudProfileResourceModel struct {
-	ID             types.String `tfsdk:"id"`
-	Name           types.String `tfsdk:"name"`
-	CloudProvider  types.String `tfsdk:"cloud_provider"`
-	Region         types.String `tfsdk:"region"`
-	AccessKey      types.String `tfsdk:"access_key"`
-	SecretKey      types.String `tfsdk:"secret_key"`
-	SubscriptionID types.String `tfsdk:"subscription_id"`
-	TenantID       types.String `tfsdk:"tenant_id"`
-	ClientID       types.String `tfsdk:"client_id"`
-	ClientSecret   types.String `tfsdk:"client_secret"`
-	CreatedAt      types.String `tfsdk:"created_at"`
+	ID                 types.String `tfsdk:"id"`
+	Name               types.String `tfsdk:"name"`
+	Database           types.String `tfsdk:"database"`
+	Region             types.String `tfsdk:"region"`
+	AccessKey          types.String `tfsdk:"access_key"`
+	SecretKey          types.String `tfsdk:"secret_key"`
+	VPCID              types.String `tfsdk:"vpc_id"`
+	SubnetID           types.String `tfsdk:"subnet_id"`
+	VPCCIDR            types.String `tfsdk:"vpc_cidr"`
+	SubnetCIDR         types.String `tfsdk:"subnet_cidr"`
+	SecurityGroupID    types.String `tfsdk:"security_group_id"`
+	SecurityGroupName  types.String `tfsdk:"security_group_name"`
+	ConnectivityConfig types.String `tfsdk:"connectivity_config"`
+	EnableSSH          types.Bool   `tfsdk:"enable_ssh"`
+	CloudType          types.String `tfsdk:"cloud_type"`
 }
 
 func (r *cloudProfileResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -50,60 +55,62 @@ func (r *cloudProfileResource) Metadata(_ context.Context, req resource.Metadata
 
 func (r *cloudProfileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a ScaleGrid cloud profile, which stores the cloud credentials used to " +
-			"provision clusters in a Bring Your Own Cloud account.",
+		Description: "Manages an AWS (EC2/VPC) ScaleGrid cloud profile for Bring Your Own Cloud " +
+			"deployments. Azure cloud profiles require an interactive permission-granting script and " +
+			"are not supported by this resource.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
-				Description:   "Unique identifier of the cloud profile.",
+				Description:   "Machine pool ID of the cloud profile.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"name": schema.StringAttribute{
-				Required:    true,
-				Description: "Human-readable name of the cloud profile.",
-			},
-			"cloud_provider": schema.StringAttribute{
 				Required:      true,
-				Description:   "Cloud provider: `aws`, `azure`, `gcp`, `digitalocean`, `oci`, or `vmware`.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
-				Validators: []validator.String{
-					stringvalidator.OneOf("aws", "azure", "gcp", "digitalocean", "oci", "vmware"),
-				},
+				Description:   "Unique name of the cloud profile.",
+				PlanModifiers: reqReplaceStr(),
+			},
+			"database": schema.StringAttribute{
+				Required:      true,
+				Description:   "Database engine this profile is for: `mongodb`, `redis`, `mysql`, or `postgresql`.",
+				PlanModifiers: reqReplaceStr(),
+				Validators:    []validator.String{stringvalidator.OneOf("mongodb", "redis", "mysql", "postgresql")},
 			},
 			"region": schema.StringAttribute{
-				Optional:    true,
-				Description: "Default cloud region for the profile.",
+				Required:      true,
+				Description:   "AWS region (e.g. `us-east-1`).",
+				PlanModifiers: reqReplaceStr(),
 			},
 			"access_key": schema.StringAttribute{
-				Optional:    true,
-				Description: "Access key (AWS) or equivalent identifier.",
+				Required:    true,
+				Description: "AWS access key. Can be updated in place to rotate credentials.",
 			},
 			"secret_key": schema.StringAttribute{
-				Optional:    true,
+				Required:    true,
 				Sensitive:   true,
-				Description: "Secret key (AWS) or equivalent credential. Write-only; not returned on read.",
+				Description: "AWS secret key. Can be updated in place to rotate credentials.",
 			},
-			"subscription_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "Subscription ID (Azure).",
+			"vpc_id":              schema.StringAttribute{Required: true, Description: "AWS VPC ID.", PlanModifiers: reqReplaceStr()},
+			"subnet_id":           schema.StringAttribute{Required: true, Description: "AWS subnet ID.", PlanModifiers: reqReplaceStr()},
+			"vpc_cidr":            schema.StringAttribute{Required: true, Description: "VPC CIDR block.", PlanModifiers: reqReplaceStr()},
+			"subnet_cidr":         schema.StringAttribute{Required: true, Description: "Subnet CIDR block.", PlanModifiers: reqReplaceStr()},
+			"security_group_id":   schema.StringAttribute{Required: true, Description: "Security group ID.", PlanModifiers: reqReplaceStr()},
+			"security_group_name": schema.StringAttribute{Required: true, Description: "Security group name.", PlanModifiers: reqReplaceStr()},
+			"connectivity_config": schema.StringAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       stringdefault.StaticString("INTERNET"),
+				Description:   "Connectivity configuration: `INTERNET`, `INTRANET`, `SECURITYGROUP`, or `CUSTOMIPRANGE`.",
+				PlanModifiers: reqReplaceStr(),
+				Validators:    []validator.String{stringvalidator.OneOf("INTERNET", "INTRANET", "SECURITYGROUP", "CUSTOMIPRANGE")},
 			},
-			"tenant_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "Tenant ID (Azure).",
+			"enable_ssh": schema.BoolAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       booldefault.StaticBool(false),
+				Description:   "Enable SSH access to the VPC.",
+				PlanModifiers: []planmodifier.Bool{boolRequiresReplace()},
 			},
-			"client_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "Client/application ID (Azure).",
-			},
-			"client_secret": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Client secret (Azure). Write-only; not returned on read.",
-			},
-			"created_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Timestamp at which the cloud profile was created.",
-			},
+			"cloud_type": schema.StringAttribute{Computed: true, Description: "Cloud provider (e.g. AWS)."},
 		},
 	}
 }
@@ -123,14 +130,39 @@ func (r *cloudProfileResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	db, ok := parseDBTypeDiag(plan.Database.ValueString(), &resp.Diagnostics)
+	if !ok {
+		return
+	}
 
-	profile, err := r.client.CreateCloudProfile(ctx, r.toAPI(plan))
+	id, actionID, err := r.client.CreateAWSCloudProfile(ctx, client.CreateAWSCloudProfileInput{
+		DBType:             db,
+		Name:               plan.Name.ValueString(),
+		Region:             plan.Region.ValueString(),
+		AccessKey:          plan.AccessKey.ValueString(),
+		SecretKey:          plan.SecretKey.ValueString(),
+		VPCID:              plan.VPCID.ValueString(),
+		SubnetID:           plan.SubnetID.ValueString(),
+		VPCCIDR:            plan.VPCCIDR.ValueString(),
+		SubnetCIDR:         plan.SubnetCIDR.ValueString(),
+		SecurityGroupID:    plan.SecurityGroupID.ValueString(),
+		SecurityGroupName:  plan.SecurityGroupName.ValueString(),
+		ConnectivityConfig: stringValue(plan.ConnectivityConfig),
+		EnableSSH:          plan.EnableSSH.ValueBool(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating cloud profile", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(id)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 
-	r.mapToState(profile, &plan)
+	if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
+		resp.Diagnostics.AddError("Error waiting for cloud profile creation", err.Error())
+		return
+	}
+
+	r.readInto(ctx, id, &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -140,7 +172,6 @@ func (r *cloudProfileResource) Read(ctx context.Context, req resource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
 	profile, err := r.client.GetCloudProfile(ctx, state.ID.ValueString())
 	if err != nil {
 		if client.IsNotFound(err) {
@@ -150,25 +181,30 @@ func (r *cloudProfileResource) Read(ctx context.Context, req resource.ReadReques
 		resp.Diagnostics.AddError("Error reading cloud profile", err.Error())
 		return
 	}
-
-	r.mapToState(profile, &state)
+	state.Name = types.StringValue(profile.Name)
+	state.CloudType = optionalString(profile.CloudType())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *cloudProfileResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan cloudProfileResourceModel
+	var plan, state cloudProfileResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	profile, err := r.client.UpdateCloudProfile(ctx, plan.ID.ValueString(), r.toAPI(plan))
-	if err != nil {
-		resp.Diagnostics.AddError("Error updating cloud profile", err.Error())
-		return
+	if plan.AccessKey.ValueString() != state.AccessKey.ValueString() ||
+		plan.SecretKey.ValueString() != state.SecretKey.ValueString() {
+		if err := r.client.UpdateAWSCloudProfileKeys(ctx, state.ID.ValueString(),
+			plan.AccessKey.ValueString(), plan.SecretKey.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Error updating cloud profile keys", err.Error())
+			return
+		}
 	}
 
-	r.mapToState(profile, &plan)
+	plan.ID = state.ID
+	r.readInto(ctx, state.ID.ValueString(), &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -178,12 +214,16 @@ func (r *cloudProfileResource) Delete(ctx context.Context, req resource.DeleteRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	if err := r.client.DeleteCloudProfile(ctx, state.ID.ValueString()); err != nil {
+	actionID, err := r.client.DeleteCloudProfile(ctx, state.ID.ValueString())
+	if err != nil {
 		if client.IsNotFound(err) {
 			return
 		}
 		resp.Diagnostics.AddError("Error deleting cloud profile", err.Error())
+		return
+	}
+	if err := r.client.WaitForAction(ctx, actionID, clusterPollInterval); err != nil {
+		resp.Diagnostics.AddError("Error waiting for cloud profile deletion", err.Error())
 	}
 }
 
@@ -191,32 +231,12 @@ func (r *cloudProfileResource) ImportState(ctx context.Context, req resource.Imp
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func (r *cloudProfileResource) toAPI(model cloudProfileResourceModel) client.CloudProfile {
-	return client.CloudProfile{
-		Name:           model.Name.ValueString(),
-		CloudProvider:  model.CloudProvider.ValueString(),
-		Region:         stringValue(model.Region),
-		AccessKey:      stringValue(model.AccessKey),
-		SecretKey:      stringValue(model.SecretKey),
-		SubscriptionID: stringValue(model.SubscriptionID),
-		TenantID:       stringValue(model.TenantID),
-		ClientID:       stringValue(model.ClientID),
-		ClientSecret:   stringValue(model.ClientSecret),
+func (r *cloudProfileResource) readInto(ctx context.Context, id string, model *cloudProfileResourceModel, diags *diag.Diagnostics) {
+	profile, err := r.client.GetCloudProfile(ctx, id)
+	if err != nil {
+		diags.AddError("Error reading cloud profile", err.Error())
+		return
 	}
-}
-
-// mapToState copies API data into the model. Sensitive write-only fields
-// (secret_key, client_secret) are preserved from configuration because the API
-// does not return them.
-func (r *cloudProfileResource) mapToState(profile *client.CloudProfile, model *cloudProfileResourceModel) {
-	model.ID = types.StringValue(profile.ID)
 	model.Name = types.StringValue(profile.Name)
-	model.CloudProvider = types.StringValue(profile.CloudProvider)
-	model.Region = optionalString(profile.Region)
-	model.AccessKey = optionalString(profile.AccessKey)
-	model.SubscriptionID = optionalString(profile.SubscriptionID)
-	model.TenantID = optionalString(profile.TenantID)
-	model.ClientID = optionalString(profile.ClientID)
-	model.CreatedAt = optionalString(profile.CreatedAt)
-	// secret_key and client_secret intentionally left as-is.
+	model.CloudType = optionalString(profile.CloudType())
 }

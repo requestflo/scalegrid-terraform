@@ -9,152 +9,205 @@ import (
 	"time"
 )
 
-func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
-	t.Helper()
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
+// envelope writes a ScaleGrid-style success envelope merged with extra fields.
+func writeEnvelope(w http.ResponseWriter, extra map[string]any) {
+	body := map[string]any{"error": map[string]any{"code": "Success"}}
+	for k, v := range extra {
+		body[k] = v
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
 
-	c, err := NewClient(Config{
-		BaseURL:  srv.URL,
-		Email:    "user@example.com",
-		APIKey:   "secret",
-		AuthMode: AuthBasic,
+func writeError(w http.ResponseWriter, code, msg string) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{"code": code, "errorMessageWithDetails": msg},
 	})
+}
+
+// newTestClient returns a client pointed at srv without performing login.
+func newTestClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	c, err := NewClient(context.Background(), Config{BaseURL: srv.URL, SkipLogin: true})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	return c
 }
 
-func TestNewClientValidation(t *testing.T) {
-	if _, err := NewClient(Config{}); err == nil {
-		t.Fatal("expected error when API key is missing")
-	}
-	if _, err := NewClient(Config{APIKey: "k", AuthMode: AuthBasic}); err == nil {
-		t.Fatal("expected error when email is missing for basic auth")
-	}
-	if _, err := NewClient(Config{APIKey: "k", AuthMode: AuthBearer}); err != nil {
-		t.Fatalf("bearer auth should not require email: %v", err)
-	}
-}
-
-func TestBasicAuthHeader(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != "user@example.com" || pass != "secret" {
-			t.Errorf("unexpected basic auth: user=%q pass=%q ok=%v", user, pass, ok)
-		}
-		_ = json.NewEncoder(w).Encode(Cluster{ID: "c1", Name: "n"})
-	})
-
-	if _, err := c.GetCluster(context.Background(), "c1"); err != nil {
-		t.Fatalf("GetCluster: %v", err)
-	}
-}
-
-func TestBearerAuthHeader(t *testing.T) {
+func TestLoginSuccess(t *testing.T) {
+	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer token123" {
-			t.Errorf("unexpected Authorization header: %q", got)
+		if r.URL.Path != "/login" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(Cluster{ID: "c1"})
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "abc"})
+		writeEnvelope(w, nil)
 	}))
 	defer srv.Close()
 
-	c, err := NewClient(Config{BaseURL: srv.URL, APIKey: "token123", AuthMode: AuthBearer})
+	_, err := NewClient(context.Background(), Config{BaseURL: srv.URL, Email: "a@b.com", Password: "pw"})
 	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+		t.Fatalf("login: %v", err)
 	}
-	if _, err := c.GetCluster(context.Background(), "c1"); err != nil {
-		t.Fatalf("GetCluster: %v", err)
+	if gotBody["username"] != "a@b.com" || gotBody["password"] != "pw" {
+		t.Errorf("unexpected login body: %+v", gotBody)
 	}
 }
 
-func TestCreateClusterRoundTrip(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/clusters" {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		var req ClusterCreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if req.Name != "prod" || req.DatabaseType != DatabaseMongoDB {
-			t.Errorf("unexpected payload: %+v", req)
-		}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(asyncResponse{
-			Cluster: Cluster{ID: "abc", Name: req.Name, DatabaseType: req.DatabaseType},
-		})
-	})
-
-	cluster, err := c.CreateCluster(context.Background(), ClusterCreateRequest{
-		Name:           "prod",
-		DatabaseType:   DatabaseMongoDB,
-		SizeID:         "small",
-		CloudProfileID: "cp1",
-	})
-	if err != nil {
-		t.Fatalf("CreateCluster: %v", err)
-	}
-	if cluster.ID != "abc" {
-		t.Errorf("expected id abc, got %q", cluster.ID)
+func TestLoginTwoFactorRequired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, "TwoFactorAuthNeeded", "")
+	}))
+	defer srv.Close()
+	_, err := NewClient(context.Background(), Config{BaseURL: srv.URL, Email: "a@b.com", Password: "pw"})
+	if err == nil {
+		t.Fatal("expected 2FA error")
 	}
 }
 
-func TestAPIErrorAndNotFound(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"message": "cluster not found"})
-	})
+func TestErrorEnvelopeAndNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, "ClusterNotFound", "The cluster was not found")
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
 
-	_, err := c.GetCluster(context.Background(), "missing")
+	_, err := c.GetCluster(context.Background(), DBMongo, "missing")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !IsNotFound(err) {
-		t.Errorf("expected IsNotFound to be true for: %v", err)
+		t.Errorf("expected IsNotFound, got: %v", err)
 	}
 }
 
-func TestWaitForClusterReady(t *testing.T) {
-	var calls int
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		status := ClusterStatusProvisioning
-		if calls >= 2 {
-			status = ClusterStatusAvailable
-		}
-		_ = json.NewEncoder(w).Encode(Cluster{ID: "c1", Status: status})
-	})
+func TestCreateClusterMongo(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeEnvelope(w, map[string]any{"clusterID": "c-123", "actionID": "a-1"})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
 
-	cluster, err := c.WaitForClusterReady(context.Background(), "c1", 10*time.Millisecond)
+	id, action, err := c.CreateCluster(context.Background(), CreateClusterInput{
+		DBType: DBMongo, Name: "prod", Size: "Small", Version: "7.0",
+		ShardCount: 1, ReplicaCount: 3, MachinePoolIDs: []string{"m1", "m2", "m3"},
+	})
 	if err != nil {
-		t.Fatalf("WaitForClusterReady: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	if cluster.Status != ClusterStatusAvailable {
-		t.Errorf("expected available, got %q", cluster.Status)
+	if id != "c-123" || action != "a-1" {
+		t.Errorf("unexpected ids: %q %q", id, action)
+	}
+	if gotPath != "/MongoClusters/create" {
+		t.Errorf("unexpected path: %s", gotPath)
+	}
+	if gotBody["clusterName"] != "prod" || gotBody["version"] != "7.0" {
+		t.Errorf("unexpected body: %+v", gotBody)
+	}
+	if gotBody["enableAuth"] != true {
+		t.Errorf("expected enableAuth true: %+v", gotBody)
+	}
+}
+
+func TestCreateClusterRequiresMachinePool(t *testing.T) {
+	c := newTestClient(t, httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
+	_, _, err := c.CreateCluster(context.Background(), CreateClusterInput{DBType: DBRedis, Name: "x"})
+	if err == nil {
+		t.Fatal("expected error when no machine pools provided")
+	}
+}
+
+func TestWaitForAction(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		status := ActionRunning
+		if calls >= 2 {
+			status = ActionCompleted
+		}
+		writeEnvelope(w, map[string]any{"action": map[string]any{"id": "a-1", "status": status}})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	if err := c.WaitForAction(context.Background(), "a-1", 5*time.Millisecond); err != nil {
+		t.Fatalf("WaitForAction: %v", err)
 	}
 	if calls < 2 {
-		t.Errorf("expected at least 2 polls, got %d", calls)
+		t.Errorf("expected >=2 polls, got %d", calls)
 	}
 }
 
-func TestListFirewallRules(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/clusters/c1/firewall_rules" {
+func TestWaitForActionFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, map[string]any{"action": map[string]any{
+			"id": "a-1", "status": ActionFailed,
+			"stepError": map[string]any{"errorMessageWithDetails": "boom"},
+		}})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+	if err := c.WaitForAction(context.Background(), "a-1", time.Millisecond); err == nil {
+		t.Fatal("expected failure error")
+	}
+}
+
+func TestFirewallRoundTrip(t *testing.T) {
+	var setCalls, configureCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Clusters/setClusterLevelIPWhiteList":
+			setCalls++
+			writeEnvelope(w, nil)
+		case "/Clusters/configureIPWhiteList":
+			configureCalls++
+			writeEnvelope(w, nil)
+		case "/Clusters/getClusterLevelIPWhiteList":
+			writeEnvelope(w, map[string]any{"cidrList": []string{"10.0.0.0/8"}})
+		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(firewallRuleListResponse{
-			Rules: []FirewallRule{{ID: "f1", CIDR: "10.0.0.0/8"}},
-		})
-	})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
 
-	rules, err := c.ListFirewallRules(context.Background(), "c1")
-	if err != nil {
-		t.Fatalf("ListFirewallRules: %v", err)
+	if err := c.SetFirewallRules(context.Background(), DBPostgreSQL, "c1", []string{"10.0.0.0/8"}); err != nil {
+		t.Fatalf("SetFirewallRules: %v", err)
 	}
-	if len(rules) != 1 || rules[0].CIDR != "10.0.0.0/8" {
-		t.Errorf("unexpected rules: %+v", rules)
+	if setCalls != 1 || configureCalls != 1 {
+		t.Errorf("expected one call each, got set=%d configure=%d", setCalls, configureCalls)
+	}
+	cidrs, err := c.GetFirewallRules(context.Background(), DBPostgreSQL, "c1")
+	if err != nil {
+		t.Fatalf("GetFirewallRules: %v", err)
+	}
+	if len(cidrs) != 1 || cidrs[0] != "10.0.0.0/8" {
+		t.Errorf("unexpected cidrs: %+v", cidrs)
+	}
+}
+
+func TestDBTypeHelpers(t *testing.T) {
+	if DBMongo.PathPrefix() != "MongoClusters" {
+		t.Errorf("path prefix: %s", DBMongo.PathPrefix())
+	}
+	if DBMongo.WireType() != "MONGODB" {
+		t.Errorf("wire type: %s", DBMongo.WireType())
+	}
+	if DBPostgreSQL.WireType() != "POSTGRESQL" {
+		t.Errorf("wire type: %s", DBPostgreSQL.WireType())
+	}
+	if db, ok := ParseDBType("postgres"); !ok || db != DBPostgreSQL {
+		t.Errorf("parse postgres: %v %v", db, ok)
+	}
+	if _, ok := ParseDBType("oracle"); ok {
+		t.Error("expected oracle to be invalid")
+	}
+	if s, ok := NormalizeSize("x2xlarge"); !ok || s != "X2XLarge" {
+		t.Errorf("normalize size: %q %v", s, ok)
 	}
 }

@@ -1,19 +1,15 @@
-# An AWS cloud profile for Bring Your Own Cloud deployments.
+# An AWS (EC2/VPC) cloud profile for MongoDB deployments.
 resource "scalegrid_cloud_profile" "aws" {
-  name           = "aws-production"
-  cloud_provider = "aws"
-  region         = "us-east-1"
-  access_key     = var.aws_access_key
-  secret_key     = var.aws_secret_key
-}
-
-# An Azure cloud profile.
-resource "scalegrid_cloud_profile" "azure" {
-  name            = "azure-production"
-  cloud_provider  = "azure"
-  region          = "eastus"
-  subscription_id = var.azure_subscription_id
-  tenant_id       = var.azure_tenant_id
-  client_id       = var.azure_client_id
-  client_secret   = var.azure_client_secret
+  database            = "mongodb"
+  name                = "aws-use1-a"
+  region              = "us-east-1"
+  access_key          = var.aws_access_key
+  secret_key          = var.aws_secret_key
+  vpc_id              = "vpc-0123456789abcdef0"
+  subnet_id           = "subnet-0123456789abcdef0"
+  vpc_cidr            = "10.0.0.0/16"
+  subnet_cidr         = "10.0.1.0/24"
+  security_group_id   = "sg-0123456789abcdef0"
+  security_group_name = "scalegrid-mongo"
+  connectivity_config = "INTERNET"
 }
