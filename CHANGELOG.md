@@ -1,3 +1,11 @@
+# [2.1.0](https://github.com/requestflo/terraform-provider-scalegrid/compare/v2.0.0...v2.1.0) (2026-06-24)
+
+
+### Features
+
+* make cloud_profile_names optional for shared (Dedicated) hosting ([5edddf4](https://github.com/requestflo/terraform-provider-scalegrid/commit/5edddf4bfae9649b895b196c6e8d481e928b00c2))
+* make cloud_profile_names optional for shared (Dedicated) hosting ([#11](https://github.com/requestflo/terraform-provider-scalegrid/issues/11)) ([7763a66](https://github.com/requestflo/terraform-provider-scalegrid/commit/7763a6652346e496071fa38f93bcdd5d43e02a78))
+
 # [2.0.0](https://github.com/requestflo/terraform-provider-scalegrid/compare/v1.0.1...v2.0.0) (2026-06-24)
 
 
