@@ -7,7 +7,8 @@ project_name: terraform-provider-scalegrid
 
 before:
   hooks:
-    - go mod tidy
+    # download (not tidy) so the release build never dirties the git tree
+    - go mod download
 
 builds:
   - env:
