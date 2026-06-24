@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/requestflo/terraform-provider-scalegrid/compare/v1.0.0...v1.0.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* include manifest checksum in SHA256SUMS for the registry ([#9](https://github.com/requestflo/terraform-provider-scalegrid/issues/9)) ([cbb3b7d](https://github.com/requestflo/terraform-provider-scalegrid/commit/cbb3b7dd5a55ffc472f1fb07c7681c30aca97608))
+
 # 1.0.0 (2026-06-24)
 
 
