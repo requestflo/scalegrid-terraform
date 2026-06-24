@@ -1,3 +1,47 @@
+# [2.0.0](https://github.com/requestflo/terraform-provider-scalegrid/compare/v1.0.1...v2.0.0) (2026-06-24)
+
+
+* feat!: split per-engine cluster resources and reconcile client with the OpenAPI spec ([bfb95b6](https://github.com/requestflo/terraform-provider-scalegrid/commit/bfb95b6df642215ff7864d2aeed7b9eff0704683))
+
+
+### Bug Fixes
+
+* align async actions, error envelope, backups and alert rules with the spec ([07aff31](https://github.com/requestflo/terraform-provider-scalegrid/commit/07aff31d4fb37a250fe370fccf1e392233ad06dc))
+
+
+### BREAKING CHANGES
+
+* `scalegrid_cluster` is removed in favour of per-engine
+resources. There are no `moved` blocks; configurations must be migrated to
+the new resource types.
+
+Client reconciliation against console.scalegrid.io:
+- Decode integer IDs (clusterID/machinePoolID/actionID and the id fields on
+  clusters, cloud profiles, backups and alert rules) which the API returns
+  as JSON numbers, tolerating both actionID/actionId casings.
+- Handle the singular `cluster` list key (Mongo/Redis/MySQL) vs `clusters`
+  (PostgreSQL).
+- Use PostgreSQL's all-lowercase endpoint paths for list/fetch/scale/delete/
+  credentials/backup/restore, and its mixed-case create/deletebackup paths.
+- Treat the database-versions response as a string array, not a map; add GCP
+  to the supported cloud providers.
+- Compare async action status case-insensitively (Running/Completed/Failed),
+  fixing a poll loop that never detected completion.
+- Drop the undocumented `enableAuth` field from create bodies; align the
+  Redis create body and remove unsupported knobs (redisConfigParams,
+  sentinelMachinePool, maxmemory_policy, enable_rdb, enable_aof,
+  sentinel_cloud_profile_names).
+- PostgreSQL on-demand backup sends type=ONDEMAND and a target; PG backup
+  deletion uses /PostgreSQLClusters/deletebackup; alert-rule deletion sends
+  no body.
+- Restrict compression_algo to snappy/zlib; expand alert rule type and
+  notification channel enums; document that pause/resume is BYOC-only.
+
+Regenerate docs and examples for the new resource layout.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014QBX2XjGQq6hAN1mnHtSHf
+
 ## [1.0.1](https://github.com/requestflo/terraform-provider-scalegrid/compare/v1.0.0...v1.0.1) (2026-06-24)
 
 
