@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/requestflo/terraform-provider-scalegrid/compare/v1.0.0...v1.0.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* sign release artifacts non-interactively in CI ([#5](https://github.com/requestflo/terraform-provider-scalegrid/issues/5)) ([3ec5e97](https://github.com/requestflo/terraform-provider-scalegrid/commit/3ec5e97c49bdc9fe5d80048e29b988a543f36134))
+
 # 1.0.0 (2026-06-24)
 
 
