@@ -151,6 +151,40 @@ go test ./...
 `make testacc` runs acceptance tests against a live account (creates real,
 billable resources; gated behind `TF_ACC=1`).
 
+## Releasing
+
+Releases are automated with [semantic-release](https://semantic-release.gitbook.io/)
+and driven by [Conventional Commits](https://www.conventionalcommits.org/). You
+do not tag manually — pushing to `main` is the release trigger.
+
+On every push to `main`, `.github/workflows/release.yml`:
+
+1. Builds and runs the unit tests.
+2. Runs semantic-release, which inspects commit messages since the last tag to
+   decide the next version, updates `CHANGELOG.md`, commits it, and creates the
+   `vX.Y.Z` tag.
+3. Invokes GoReleaser on that tag to build the signed, multi-platform artifacts
+   and publish the GitHub Release that the Terraform Registry consumes.
+
+Commit message → version bump:
+
+| Commit type | Example | Bump |
+|-------------|---------|------|
+| `fix:` | `fix: correct MySQL engine field` | patch (`x.y.Z`) |
+| `feat:` | `feat: add scalegrid_user resource` | minor (`x.Y.0`) |
+| `feat!:` / `BREAKING CHANGE:` | `feat!: rename size values` | major (`X.0.0`) |
+| `chore:`, `docs:`, `refactor:`, `test:`, `ci:` | `docs: clarify auth` | none |
+
+Required repository setup (one-time): the repo must be public, the GPG secrets
+`GPG_PRIVATE_KEY` and `PASSPHRASE` must be set, and the matching public key must
+be registered in the Terraform Registry. If branch protection on `main` requires
+PRs, allow the release workflow (or a release bot) to push the changelog commit
+and tag.
+
+The first automated release defaults to `v1.0.0`. To start in the `0.x` series
+instead, create a seed tag before the first release: `git tag v0.0.0 && git push
+origin v0.0.0`.
+
 ## Repository layout
 
 ```
