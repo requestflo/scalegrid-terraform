@@ -47,8 +47,9 @@ func commonClusterAttributes() map[string]schema.Attribute {
 		},
 		"size": schema.StringAttribute{
 			Required: true,
-			Description: "Instance size tier: `Micro`, `Small`, `Medium`, `Large`, `XLarge`, " +
-				"`X2XLarge`, or `X4XLarge`. Changing this scales the cluster in place.",
+			Description: "Instance size tier: `Nano`, `Micro`, `Small`, `Medium`, `Large`, `XLarge`, " +
+				"`X2XLarge`, or `X4XLarge` (availability depends on the cloud provider; `Nano` is " +
+				"offered on DigitalOcean). Changing this scales the cluster in place.",
 			Validators: []validator.String{stringvalidator.OneOf(client.ValidSizes...)},
 		},
 		"version": schema.StringAttribute{
