@@ -1,3 +1,11 @@
+# [2.3.0](https://github.com/requestflo/terraform-provider-scalegrid/compare/v2.2.2...v2.3.0) (2026-06-26)
+
+
+### Features
+
+* allow the Nano instance size ([31bbe13](https://github.com/requestflo/terraform-provider-scalegrid/commit/31bbe136de88aef1cbe3e1139b11d3a1d07665d0))
+* allow the Nano instance size ([#15](https://github.com/requestflo/terraform-provider-scalegrid/issues/15)) ([f8ba75b](https://github.com/requestflo/terraform-provider-scalegrid/commit/f8ba75bd79290ead342cf1e9f48eb7fc1404091c))
+
 ## [2.2.2](https://github.com/requestflo/terraform-provider-scalegrid/compare/v2.2.1...v2.2.2) (2026-06-26)
 
 
