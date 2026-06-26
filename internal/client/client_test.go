@@ -425,4 +425,7 @@ func TestDBTypeHelpers(t *testing.T) {
 	if s, ok := NormalizeSize("x2xlarge"); !ok || s != "X2XLarge" {
 		t.Errorf("normalize size: %q %v", s, ok)
 	}
+	if s, ok := NormalizeSize("nano"); !ok || s != "Nano" {
+		t.Errorf("normalize nano: %q %v", s, ok)
+	}
 }

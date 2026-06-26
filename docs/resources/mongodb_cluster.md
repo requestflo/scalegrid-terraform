@@ -50,7 +50,7 @@ resource "scalegrid_mongodb_cluster" "dedicated" {
 ### Required
 
 - `name` (String) Unique name of the cluster.
-- `size` (String) Instance size tier: `Micro`, `Small`, `Medium`, `Large`, `XLarge`, `X2XLarge`, or `X4XLarge`. Changing this scales the cluster in place.
+- `size` (String) Instance size tier: `Nano`, `Micro`, `Small`, `Medium`, `Large`, `XLarge`, `X2XLarge`, or `X4XLarge` (availability depends on the cloud provider; `Nano` is offered on DigitalOcean). Changing this scales the cluster in place.
 - `version` (String) Database engine version. Use the `scalegrid_database_versions` data source to discover valid values.
 
 ### Optional

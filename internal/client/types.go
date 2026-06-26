@@ -91,12 +91,15 @@ func ParseDBType(s string) (DBType, bool) {
 	}
 }
 
-// Valid cluster sizes (t-shirt tiers).
-var ValidSizes = []string{"Micro", "Small", "Medium", "Large", "XLarge", "X2XLarge", "X4XLarge"}
+// Valid cluster sizes (t-shirt tiers). Availability depends on the cloud
+// provider (e.g. Nano is offered on DigitalOcean).
+var ValidSizes = []string{"Nano", "Micro", "Small", "Medium", "Large", "XLarge", "X2XLarge", "X4XLarge"}
 
 // NormalizeSize canonicalises a user-supplied size to ScaleGrid's casing.
 func NormalizeSize(s string) (string, bool) {
 	switch strings.ToLower(s) {
+	case "nano":
+		return "Nano", true
 	case "micro":
 		return "Micro", true
 	case "small":
