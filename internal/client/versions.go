@@ -1,10 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 )
 
 // GetDatabaseVersions returns the available database versions for an engine and
@@ -24,6 +27,42 @@ func (c *Client) GetDatabaseVersions(ctx context.Context, db DBType, cloudProvid
 		return nil, err
 	}
 	return resp.Versions, nil
+}
+
+// versionList decodes the getDatabaseActiveVersions "versions" field. The API
+// returns it either as a JSON array of version identifiers or as a JSON object
+// mapping each version identifier to a display name; in both cases we expose the
+// identifiers (the values accepted by a cluster's `version` attribute).
+type versionList []string
+
+func (v *versionList) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*v = nil
+		return nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var arr []string
+		if err := json.Unmarshal(trimmed, &arr); err != nil {
+			return err
+		}
+		*v = arr
+	case '{':
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &m); err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		*v = keys
+	default:
+		return fmt.Errorf("scalegrid: unexpected versions payload %s", string(trimmed))
+	}
+	return nil
 }
 
 func normalizeCloudProvider(s string) (string, error) {

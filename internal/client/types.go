@@ -455,7 +455,8 @@ type firewallResponse struct {
 }
 
 // databaseVersionsResponse wraps GET /Clusters/getDatabaseActiveVersions. The
-// API returns a plain array of supported version identifiers.
+// API returns the supported versions either as an array of identifiers or as an
+// object keyed by identifier; versionList normalises both to a list.
 type databaseVersionsResponse struct {
-	Versions []string `json:"versions"`
+	Versions versionList `json:"versions"`
 }
