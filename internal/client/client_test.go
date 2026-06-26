@@ -339,6 +339,44 @@ func TestFindSharedCloudProfile(t *testing.T) {
 	}
 }
 
+// TestGetDatabaseVersions verifies the versions field is decoded whether the API
+// returns an array of identifiers or an object keyed by identifier.
+func TestGetDatabaseVersions(t *testing.T) {
+	var payload string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Clusters/getDatabaseActiveVersions" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("cloudProvider"); got != "EC2" {
+			t.Errorf("expected cloudProvider=EC2, got %q", got)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+	ctx := context.Background()
+
+	// Object form: {"versions": {"V70": "7.0", "V60": "6.0"}} -> sorted keys.
+	payload = `{"error":{"code":"Success"},"versions":{"V70":"7.0","V60":"6.0"}}`
+	got, err := c.GetDatabaseVersions(ctx, DBMongo, "AWS")
+	if err != nil {
+		t.Fatalf("object form: %v", err)
+	}
+	if len(got) != 2 || got[0] != "V60" || got[1] != "V70" {
+		t.Errorf("object form: unexpected versions %+v", got)
+	}
+
+	// Array form: {"versions": ["V70","V60"]} -> as-is.
+	payload = `{"error":{"code":"Success"},"versions":["V70","V60"]}`
+	got, err = c.GetDatabaseVersions(ctx, DBMongo, "AWS")
+	if err != nil {
+		t.Fatalf("array form: %v", err)
+	}
+	if len(got) != 2 || got[0] != "V70" {
+		t.Errorf("array form: unexpected versions %+v", got)
+	}
+}
+
 func TestDBTypeHelpers(t *testing.T) {
 	if DBMongo.PathPrefix() != "MongoClusters" {
 		t.Errorf("path prefix: %s", DBMongo.PathPrefix())
