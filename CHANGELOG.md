@@ -1,3 +1,11 @@
+## [2.4.1](https://github.com/requestflo/terraform-provider-scalegrid/compare/v2.4.0...v2.4.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* harden JSON decoding for number/string field inconsistencies ([9df9c77](https://github.com/requestflo/terraform-provider-scalegrid/commit/9df9c77c43c4aca488596f1e154e835ee461b8d4))
+* harden JSON decoding for number/string field inconsistencies ([#17](https://github.com/requestflo/terraform-provider-scalegrid/issues/17)) ([e128ed2](https://github.com/requestflo/terraform-provider-scalegrid/commit/e128ed26307ebf13b14ba741e525a918f9207e1e))
+
 # [2.4.0](https://github.com/requestflo/terraform-provider-scalegrid/compare/v2.3.0...v2.4.0) (2026-06-26)
 
 
